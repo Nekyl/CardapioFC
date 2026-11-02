@@ -108,10 +108,6 @@ Edite `signing.properties` com os dados da sua keystore e coloque o arquivo `.jk
 
 ## Compatibilidade
 
-A configuração pública atual gera apenas a arquitetura `arm64-v8a`, que atende à maioria dos aparelhos Android modernos, independentemente de o processador ser Snapdragon, MediaTek, Exynos, Kirin, Tensor ou Unisoc.
-
-A versão atual não inclui bibliotecas para `armeabi-v7a`, `x86` ou `x86_64`. Para suportar aparelhos exclusivamente 32-bit ou emuladores x86, é necessário adicionar essas ABIs no `app/build.gradle`, aumentando o tamanho final do APK.
-
 O projeto usa `minSdk 26`, equivalente ao Android 8.0.
 
 ## Estrutura do projeto
