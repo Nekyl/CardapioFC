@@ -82,6 +82,14 @@ O APK será gerado em:
 app/build/outputs/apk/release/app-release.apk
 ```
 
+Por padrão, o build gera o APK compacto somente para `arm64-v8a`. Para gerar o APK universal, incluindo também `x86_64`, use:
+
+```bash
+./gradlew :app:assembleRelease -Puniversal
+```
+
+O código da aplicação é o mesmo nas duas variantes; somente as bibliotecas nativas Python incluídas no APK mudam. A variante universal é maior, mas também atende emuladores e dispositivos x86_64.
+
 Sem uma configuração de assinatura local, o Gradle gera uma release não assinada. Para instalar diretamente em um aparelho, use uma keystore própria ou compile uma variante debug:
 
 ```bash
