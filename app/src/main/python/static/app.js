@@ -20,6 +20,8 @@
     requestId: 0,
     liveSnapshotReady: false,
     autoScrollDone: false,
+    autoScrollRequested: false,
+    pendingScrollMode: "",
   };
 
   const refs = {
@@ -197,7 +199,7 @@
   }
 
   const FRONTEND_CACHE_TTL = 30 * 60 * 1000;
-  const FRONTEND_CACHE_VERSION = "v18";
+  const FRONTEND_CACHE_VERSION = "v19";
   const LIVE_POLL_INTERVAL_MS = 45_000;
   let liveStream = null;
   let liveStreamGeneration = 0;
@@ -276,13 +278,14 @@
     }
   }
 
-  async function loadDate(date) {
+  async function loadDate(date, scrollMode = "") {
     const requestId = ++state.requestId;
     state.date = date;
     state.leagueSlug = "";
     state.liveOnly = false;
     state.liveSnapshotReady = date !== state.today;
     state.autoScrollDone = false;
+    state.pendingScrollMode = scrollMode;
     refs.liveOnlyToggle.checked = false;
     renderDateRail();
     setLoading(true);
@@ -698,6 +701,10 @@
     });
   }
 
+  function scrollToTop() {
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  }
+
   function chooseAutoScrollMatch(matches) {
     const ordered = chronologicalMatches(matches)
       .map((match) => ({ match, timestamp: kickoffTimestamp(match) }))
@@ -751,7 +758,18 @@
     attachLogoFallbacks(refs.content);
     updateStickyLeague();
     if (isLeaguesTab) scrollToFirstLeagueDayMatch(selected);
-    else if (state.liveSnapshotReady) scrollToNearestTodayMatch(selected);
+    else if (state.pendingScrollMode) {
+      const scrollMode = state.pendingScrollMode;
+      state.pendingScrollMode = "";
+      state.autoScrollRequested = false;
+      state.autoScrollDone = true;
+      if (scrollMode === "top") scrollToTop();
+      else scrollToNearestTodayMatch(selected);
+    } else if (state.autoScrollRequested) {
+      state.autoScrollRequested = false;
+      state.autoScrollDone = true;
+      scrollToNearestTodayMatch(selected);
+    }
     startLiveStream();
     ensureLiveClockTimer();
   }
@@ -821,6 +839,16 @@
   }
 
   window.addEventListener("scroll", updateStickyLeague, { passive: true });
+  function cancelAutoScrollForManualInteraction(event) {
+    if (event.target === refs.liveOnlyToggle || refs.liveOnlyToggle.contains(event.target)) return;
+    state.autoScrollRequested = false;
+    state.autoScrollDone = true;
+    // Interrompe uma rolagem suave que ainda esteja em andamento.
+    window.scrollTo({ top: window.scrollY, behavior: "auto" });
+  }
+  window.addEventListener("wheel", cancelAutoScrollForManualInteraction, { passive: true });
+  window.addEventListener("touchstart", cancelAutoScrollForManualInteraction, { passive: true });
+  window.addEventListener("pointerdown", cancelAutoScrollForManualInteraction, { passive: true });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") stopLiveStream();
     else startLiveStream();
@@ -829,6 +857,8 @@
   document.addEventListener("change", (event) => {
     if (event.target === refs.liveOnlyToggle) {
       state.liveOnly = event.target.checked;
+      state.autoScrollRequested = true;
+      state.pendingScrollMode = "today-nearest";
       renderContent();
     }
   });
@@ -837,7 +867,8 @@
     const target = event.target.closest("button");
     if (!target) return;
     if (target.dataset.date) {
-      loadDate(target.dataset.date);
+      const scrollMode = target.dataset.date === state.today ? "today-nearest" : "top";
+      loadDate(target.dataset.date, scrollMode);
       return;
     }
     if (target.dataset.tab) {
