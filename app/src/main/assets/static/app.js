@@ -1,7 +1,6 @@
 (() => {
   "use strict";
 
-  // WebViews antigos, como alguns Galaxy S9, ainda não implementam replaceAll.
   if (!String.prototype.replaceAll) {
     String.prototype.replaceAll = function(search, replacement) {
       return this.split(search).join(replacement);
