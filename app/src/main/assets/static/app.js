@@ -1,6 +1,7 @@
 (() => {
   "use strict";
 
+  // WebViews antigos, como alguns Galaxy S9, ainda não implementam replaceAll.
   if (!String.prototype.replaceAll) {
     String.prototype.replaceAll = function(search, replacement) {
       return this.split(search).join(replacement);
@@ -564,7 +565,14 @@
         clockDisplay: current.clockDisplay,
         period: current.period,
       };
+      const existingChannels = Array.isArray(current.channels) ? [...current.channels] : [];
       Object.assign(current, update);
+      if (existingChannels.length && (!Array.isArray(current.channels) || !current.channels.length || current.channels.includes("Canal não informado"))) {
+        current.channels = existingChannels;
+      }
+      if (current.match && existingChannels.length && (!Array.isArray(current.match.channels) || !current.match.channels.length)) {
+        current.match.channels = existingChannels;
+      }
       if (!card) {
         needsRender = true;
         return;
