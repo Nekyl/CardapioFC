@@ -31,7 +31,7 @@ API_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 REQUEST_TIMEOUT = 15
 LIVE_REFRESH_INTERVAL_SECONDS = 45
 SQLITE_CACHE_TTL = 24 * 60 * 60
-CACHE_NAMESPACE = "v17"
+CACHE_NAMESPACE = "v20"
 SQLITE_CACHE_PATH = BASE_DIR / "games_cache.sqlite3"
 CHANNEL_SCRAPER_TTL = 4 * 60 * 60
 CHANNEL_SCRAPER_URLS = (
@@ -232,6 +232,19 @@ def normalize_channel_label(value: Any) -> str:
     cleaned = re.sub(r"\s+", " ", str(value or "")).strip()
     if not cleaned:
         return ""
+    upper = cleaned.upper()
+    # O Futebol na TV diferencia os subcanais e envia estes nomes no markup.
+    # Preserve a identificação em vez de reduzir tudo a ESPN/SporTV/Premiere.
+    for prefix, display in (("SPORTV", "SporTV"), ("PREMIERE", "Premiere"), ("ESPN", "ESPN")):
+        if upper == prefix or upper.startswith(prefix + " "):
+            suffix = cleaned[len(prefix):].strip()
+            if suffix.upper() == "FC":
+                suffix = "FC"
+            elif suffix.upper() == "CLUBES":
+                suffix = "Clubes"
+            elif suffix.isdigit():
+                suffix = str(int(suffix))
+            return f"{display} {suffix}".strip()
     for keyword, channel_name in CHANNEL_KEYWORDS:
         match = channel_keyword_pattern(keyword).search(cleaned)
         if match:
@@ -285,6 +298,7 @@ class FallbackScraper:
 
     def __init__(self) -> None:
         self._cache: dict[str, list[str]] = {}
+        self._detail_urls: dict[str, str] = {}
         self._last_update = 0.0
         self._last_attempt = 0.0
         self._refreshing = False
@@ -357,6 +371,76 @@ class FallbackScraper:
             channels = specific_channels
         return channels
 
+    @staticmethod
+    def _structured_matches(source: str) -> list[tuple[str, list[str], str | None]]:
+        """Extrai times, canais e link da marcação atual do Futebol na TV."""
+        if lxml_html is None:
+            # Chaquopy não inclui lxml no APK. O markup dos jogos é simples e
+            # permite este fallback sem dependências nativas adicionais.
+            def plain(fragment: str) -> str:
+                return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", fragment))).strip()
+
+            result: list[tuple[str, list[str], str | None]] = []
+            articles = re.findall(r"<article\b[^>]*class=[\"'][^\"']*\bmatch\b[^\"']*[\"'][^>]*>(.*?)</article>", source, flags=re.IGNORECASE | re.DOTALL)
+            for article in articles:
+                team_fragments = re.findall(r"<[^>]*class=[\"'][^\"']*\bm-name\b[^\"']*[\"'][^>]*>(.*?)</[^>]+>", article, flags=re.IGNORECASE | re.DOTALL)
+                teams = [plain(fragment) for fragment in team_fragments if plain(fragment)]
+                aria_match = re.search(r"aria-label=[\"']([^\"']+\s+x\s+[^\"']+)[\"']", article, flags=re.IGNORECASE)
+                if len(teams) < 2 and aria_match:
+                    teams = [part.strip() for part in re.split(r"\s+x\s+", unescape(aria_match.group(1)), maxsplit=1, flags=re.IGNORECASE)]
+                if len(teams) < 2:
+                    continue
+                channels: list[str] = []
+                channels_match = re.search(r"<div\b[^>]*class=[\"'][^\"']*\bm-channels\b[^\"']*[\"'][^>]*>(.*?)</div>", article, flags=re.IGNORECASE | re.DOTALL)
+                if channels_match:
+                    for raw in re.findall(r"<b\b[^>]*>(.*?)</b>", channels_match.group(1), flags=re.IGNORECASE | re.DOTALL):
+                        value = normalize_channel_label(plain(raw))
+                        if value and not is_non_channel_service(value) and value not in channels:
+                            channels.append(value)
+                link_match = re.search(r"<a\b[^>]*class=[\"'][^\"']*\bm-link\b[^\"']*[\"'][^>]*href=[\"']([^\"']+)", article, flags=re.IGNORECASE | re.DOTALL)
+                result.append((f"{teams[0]} x {teams[1]}", channels, link_match.group(1) if link_match else None))
+            return result
+        try:
+            tree = lxml_html.fromstring(source)
+        except (TypeError, ValueError):
+            return []
+        result: list[tuple[str, list[str], str | None]] = []
+        articles = tree.xpath('//article[contains(concat(" ", normalize-space(@class), " "), " match ")]')
+        for article in articles:
+            teams = [re.sub(r"\s+", " ", node.text_content()).strip() for node in article.xpath('.//*[contains(concat(" ", normalize-space(@class), " "), " m-name ")]')]
+            aria_label = str((article.xpath('.//a[contains(@class, "m-link")]/@aria-label') or [""])[0]).strip()
+            if len(teams) < 2 and " x " in normalize_name(aria_label):
+                teams = [part.strip() for part in re.split(r"\s+x\s+", aria_label, maxsplit=1, flags=re.IGNORECASE)]
+            if len(teams) < 2:
+                continue
+            channel_nodes = article.xpath('.//*[contains(concat(" ", normalize-space(@class), " "), " m-channels ")]//span')
+            channels: list[str] = []
+            for node in channel_nodes:
+                raw = " ".join(str(item).strip() for item in node.xpath('.//b//text()') if str(item).strip())
+                value = normalize_channel_label(raw)
+                if value and not is_non_channel_service(value) and value not in channels:
+                    channels.append(value)
+            hrefs = article.xpath('.//a[contains(@class, "m-link")]/@href')
+            detail_url = str(hrefs[0]) if hrefs else None
+            result.append((f"{teams[0]} x {teams[1]}", channels, detail_url))
+        return result
+
+    def _fetch_detail_channels(self, url: str) -> list[str]:
+        if not url:
+            return []
+        if url.startswith("/"):
+            url = "https://www.futebolnatv.com.br" + url
+        try:
+            response = requests.get(url, headers={**REQUEST_HEADERS, "Accept": "text/html,application/xhtml+xml"}, timeout=REQUEST_TIMEOUT)
+            if not response.ok:
+                return []
+            structured = self._structured_matches(response.text)
+            if structured:
+                return structured[0][1]
+            return self._channels_from_text(response.text)
+        except requests.RequestException:
+            return []
+
     def _fetch_schedule(self, force: bool = False) -> None:
         now = time.time()
         with self._condition:
@@ -372,6 +456,7 @@ class FallbackScraper:
             self._last_attempt = now
 
         new_cache: dict[str, list[str]] = {}
+        new_detail_urls: dict[str, str] = {}
         headers = {
             **REQUEST_HEADERS,
             "Accept": "text/html,application/xhtml+xml",
@@ -383,15 +468,24 @@ class FallbackScraper:
                     response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
                     if not response.ok:
                         continue
-                    for text in self._text_candidates(response.text):
-                        channels = self._channels_from_text(text)
-                        if channels:
-                            new_cache[normalize_name(text)] = channels
+                    structured = self._structured_matches(response.text)
+                    if structured:
+                        for matchup, channels, detail_url in structured:
+                            key = normalize_name(matchup)
+                            new_cache[key] = channels
+                            if detail_url:
+                                new_detail_urls[key] = detail_url
+                    else:
+                        for text in self._text_candidates(response.text):
+                            channels = self._channels_from_text(text)
+                            if channels:
+                                new_cache[normalize_name(text)] = channels
                 except requests.RequestException as error:
                     print(f"[Scraper] Erro ao buscar {url}: {error}")
             if new_cache:
                 with self._condition:
                     self._cache = new_cache
+                    self._detail_urls = new_detail_urls
                     self._last_update = time.time()
         finally:
             with self._condition:
@@ -418,6 +512,11 @@ class FallbackScraper:
             if score == 2 and score > highest_score:
                 best_channels = channels
                 highest_score = score
+                best_key = raw_text
+        if not best_channels and highest_score == 2:
+            with self._condition:
+                detail_url = self._detail_urls.get(best_key)
+            best_channels = self._fetch_detail_channels(detail_url or "")
         return list(best_channels)
 
 
@@ -598,7 +697,7 @@ def parse_league(slug: str, payload: dict[str, Any], ymd: str, include_channels:
             "away": away,
             "score": f"{home['score']}-{away['score']}" if show_score and home["score"] is not None and away["score"] is not None else None,
             "venue": venue,
-            "channels": channels_for_match(slug, home["name"], away["name"], ymd, competition.get("broadcasts")) if include_channels else ["Canal não informado"],
+            "channels": channels_for_match(slug, home["name"], away["name"], ymd, competition.get("broadcasts")) if include_channels else [],
         })
     return matches, logo
 
