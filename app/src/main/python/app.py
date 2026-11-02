@@ -31,7 +31,7 @@ API_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 REQUEST_TIMEOUT = 15
 LIVE_REFRESH_INTERVAL_SECONDS = 45
 SQLITE_CACHE_TTL = 24 * 60 * 60
-CACHE_NAMESPACE = "v21"
+CACHE_NAMESPACE = "v22"
 SQLITE_CACHE_PATH = BASE_DIR / "games_cache.sqlite3"
 CHANNEL_SCRAPER_TTL = 4 * 60 * 60
 CHANNEL_SCRAPER_URLS = (
@@ -501,18 +501,29 @@ class FallbackScraper:
         self._fetch_schedule()
         home_parts = [part for part in normalize_name(home).split() if len(part) > 2]
         away_parts = [part for part in normalize_name(away).split() if len(part) > 2]
-        best_channels: list[str] = []
-        highest_score = 0
-        with self._condition:
-            cache_items = list(self._cache.items())
-        for raw_text, channels in cache_items:
-            home_score = any(part in raw_text for part in home_parts)
-            away_score = any(part in raw_text for part in away_parts)
-            score = int(home_score) + int(away_score)
-            if score == 2 and score > highest_score:
-                best_channels = channels
-                highest_score = score
-                best_key = raw_text
+        def lookup() -> tuple[list[str], int, str | None, bool]:
+            best_channels: list[str] = []
+            highest_score = 0
+            best_key: str | None = None
+            with self._condition:
+                cache_items = list(self._cache.items())
+            for raw_text, channels in cache_items:
+                home_score = any(part in raw_text for part in home_parts)
+                away_score = any(part in raw_text for part in away_parts)
+                score = int(home_score) + int(away_score)
+                if score == 2 and score > highest_score:
+                    best_channels = channels
+                    highest_score = score
+                    best_key = raw_text
+            return best_channels, highest_score, best_key, bool(cache_items)
+
+        best_channels, highest_score, best_key, has_cache = lookup()
+        # Na abertura após o processo Android ser recriado, o preload pode
+        # falhar/transitoriamente ainda não ter populado a grade. Não aceite
+        # esse estado vazio: faça uma tentativa síncrona antes de responder.
+        if not has_cache:
+            self._fetch_schedule(force=True)
+            best_channels, highest_score, best_key, _ = lookup()
         if not best_channels and highest_score == 2:
             with self._condition:
                 detail_url = self._detail_urls.get(best_key)

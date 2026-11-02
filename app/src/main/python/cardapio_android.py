@@ -9,4 +9,4 @@ def games_json(date, league=None):
     return json.dumps(payload, ensure_ascii=False)
 
 def live_json(date, league=None):
-    return json.dumps(app.refresh_live_matches(app.fetch_fresh_day(date, league, include_channels=False)), ensure_ascii=False)
+    return json.dumps(app.refresh_live_matches(app.fetch_fresh_day(date, league, include_channels=True)), ensure_ascii=False)
