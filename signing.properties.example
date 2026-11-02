@@ -1,0 +1,5 @@
+# Copie para signing.properties e preencha apenas na sua máquina.
+storeFile=cardapio-zero.jks
+storePassword=COLOQUE_A_SENHA_DA_KEYSTORE
+keyAlias=cardapiofc-zero
+keyPassword=COLOQUE_A_SENHA_DA_CHAVE
