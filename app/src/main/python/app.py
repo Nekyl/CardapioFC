@@ -31,7 +31,7 @@ API_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 REQUEST_TIMEOUT = 15
 LIVE_REFRESH_INTERVAL_SECONDS = 45
 SQLITE_CACHE_TTL = 24 * 60 * 60
-CACHE_NAMESPACE = "v20"
+CACHE_NAMESPACE = "v21"
 SQLITE_CACHE_PATH = BASE_DIR / "games_cache.sqlite3"
 CHANNEL_SCRAPER_TTL = 4 * 60 * 60
 CHANNEL_SCRAPER_URLS = (
@@ -935,7 +935,7 @@ def fetch_fresh_day(ymd: str, slug: str | None = None, include_channels: bool = 
 def live_games_stream(ymd: str, slug: str | None = None):
     last_signature = ""
     while True:
-        payload = refresh_live_matches(fetch_fresh_day(ymd, slug, include_channels=False))
+        payload = refresh_live_matches(fetch_fresh_day(ymd, slug, include_channels=True))
         compact = [
             {
                 "id": match.get("id"),
@@ -1037,7 +1037,7 @@ def live_games(
         raise HTTPException(status_code=400, detail="Data inválida") from error
     if league is not None and league not in LEAGUE_BY_SLUG:
         raise HTTPException(status_code=400, detail="Liga inválida")
-    return refresh_live_matches(fetch_fresh_day(date, league, include_channels=False))
+    return refresh_live_matches(fetch_fresh_day(date, league, include_channels=True))
 
 
 @app.get("/api/games/stream")
