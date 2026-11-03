@@ -36,12 +36,43 @@ O Cardápio FC possui uma interface nativa baseada em WebView e um backend Pytho
 <div align="center">
   <table>
     <tr>
-      <td align="center" valign="top"><img src="docs/screenshots/ao-vivo.jpg" alt="Lista de partidas ao vivo" width="250"><br><sub>Partidas ao vivo</sub></td>
-      <td align="center" valign="top"><img src="docs/screenshots/ligas.jpg" alt="Seleção de ligas" width="250"><br><sub>Ligas e competições</sub></td>
-      <td align="center" valign="top"><img src="docs/screenshots/onde-assistir.jpg" alt="Canais onde assistir" width="250"><br><sub>Onde assistir</sub></td>
+      <td align="center" valign="top">
+        <img
+          src="docs/screenshots/ao-vivo.jpg"
+          alt="Lista de partidas ao vivo"
+          width="250"
+          height="450"
+          style="object-fit: cover;"
+        >
+        <br>
+        <sub>Partidas ao vivo</sub>
+      </td>
+      <td align="center" valign="top">
+        <img
+          src="docs/screenshots/ligas.jpg"
+          alt="Seleção de ligas"
+          width="250"
+          height="450"
+          style="object-fit: cover;"
+        >
+        <br>
+        <sub>Ligas e competições</sub>
+      </td>
+      <td align="center" valign="top">
+        <img
+          src="docs/screenshots/onde-assistir.jpg"
+          alt="Canais onde assistir"
+          width="250"
+          height="450"
+          style="object-fit: cover;"
+        >
+        <br>
+        <sub>Onde assistir</sub>
+      </td>
     </tr>
   </table>
 </div>
+
 
 ## Como funciona
 
