@@ -28,7 +28,7 @@ O Cardápio FC possui uma interface nativa baseada em WebView e um backend Pytho
 - Atualização de partidas ao vivo.
 - Cache local para melhorar a experiência durante consultas repetidas.
 - Interface responsiva para celulares Android.
-- Compatibilidade com WebViews mais antigos, incluindo aparelhos como Galaxy S9.
+- Compatibilidade com WebViews mais antigos.
 - Backend Python executado dentro do APK, sem servidor externo do usuário.
 
 ## Screenshots
@@ -193,3 +193,5 @@ O projeto não garante que todas as partidas ou transmissões estarão disponív
 ## Privacidade
 
 O aplicativo não precisa de uma conta para consultar os jogos. As requisições necessárias são feitas para as fontes externas configuradas no `app.py`. O cache local é armazenado no espaço privado do aplicativo.
+
+Antes de distribuir uma versão pública, revise as URLs, políticas de privacidade e condições de uso das fontes externas utilizadas.

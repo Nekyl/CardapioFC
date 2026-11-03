@@ -4,13 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0b0b0e" />
-    <meta name="description" content="Calendário de jogos e onde assistir no Brasil." />
+    <meta name="description" content="Calendário de jogos e onde assistir." />
     <title>Cardápio FC</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260831-6" />
-    <script defer src="/static/app.js?v=20260831-9"></script>
+    <link rel="stylesheet" href="/static/styles.css?v=20261103-1" />
+    <script defer src="/static/app.js?v=20261103-1"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -20,6 +20,9 @@
             <button class="tab-button is-active" type="button" data-tab="todos">Todos</button>
             <button class="tab-button" type="button" data-tab="ligas">Ligas</button>
           </nav>
+          <button class="top-menu-button" type="button" data-action="open-iptv" aria-label="Abrir menu IPTV" aria-haspopup="dialog" aria-controls="iptv-dialog">
+            <span></span><span></span><span></span>
+          </button>
         </div>
 
         <div class="date-rail content-width" id="date-rail" aria-label="Escolha o dia"></div>
@@ -52,9 +55,6 @@
 
       <main class="content-width main-content">
         <div class="loading-state" id="loading-state" aria-live="polite">
-          <div class="skeleton-card"></div>
-          <div class="skeleton-card"></div>
-          <div class="skeleton-card"></div>
         </div>
         <div class="empty-state is-hidden" id="empty-state" aria-live="polite">Nenhum jogo nesta data.</div>
         <div class="error-state is-hidden" id="error-state" aria-live="polite">Não foi possível carregar os jogos agora.</div>
@@ -87,8 +87,23 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
             </button>
           </div>
-          <p class="broadcast-label">Onde assistir no Brasil</p>
+          <p class="broadcast-label">Onde assistir</p>
           <ul class="broadcast-list" id="broadcast-list"></ul>
+        </section>
+      </div>
+
+      <div class="modal-layer is-hidden" id="iptv-dialog" role="dialog" aria-modal="true" aria-labelledby="iptv-dialog-title">
+        <button class="modal-backdrop" type="button" data-action="close-iptv" aria-label="Fechar menu IPTV"></button>
+        <section class="iptv-panel">
+          <div class="drawer-header"><div><h2 id="iptv-dialog-title">Lista IPTV</h2><p class="iptv-status-line" id="iptv-status-line">Nenhuma lista conectada.</p></div><button class="close-button" type="button" data-action="close-iptv" aria-label="Fechar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button></div>
+          <div id="iptv-login-form">
+            <div class="iptv-mode-tabs"><button type="button" class="iptv-mode is-active" data-iptv-mode="xtream">Xtream Codes</button><button type="button" class="iptv-mode" data-iptv-mode="m3u">Link M3U</button></div>
+            <div class="iptv-fields" id="iptv-xtream-fields"><label>Servidor<input id="iptv-server" type="url" autocomplete="url" placeholder="https://servidor.exemplo"></label><label>Usuário<input id="iptv-user" type="text" autocomplete="username"></label><label>Senha<input id="iptv-password" type="password" autocomplete="current-password"></label></div>
+            <div class="iptv-fields is-hidden" id="iptv-m3u-fields"><label>Link da playlist M3U<input id="iptv-m3u" type="url" autocomplete="url" placeholder="https://.../playlist.m3u"></label></div>
+            <button class="iptv-primary-button" type="button" data-action="connect-iptv">Conectar lista</button>
+            <p class="iptv-hint">Use somente listas e conteúdos para os quais você possui autorização.</p>
+          </div>
+          <div class="iptv-connected-actions is-hidden" id="iptv-connected-actions"><button class="iptv-secondary-button" type="button" data-action="refresh-iptv">Atualizar canais</button><button class="iptv-danger-button" type="button" data-action="disconnect-iptv">Desconectar e apagar dados</button></div>
         </section>
       </div>
     </div>
