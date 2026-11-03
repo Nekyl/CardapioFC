@@ -189,7 +189,7 @@ public final class PlayerActivity extends Activity {
         String url = getIntent().getStringExtra(EXTRA_URL);
         if (url == null || url.trim().isEmpty()) { finish(); return; }
         DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
-                .setUserAgent("CardapioFC/3.0 Android")
+                .setUserAgent("CardapioFC/4.1 Android")
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(12000)
                 .setReadTimeoutMs(20000);

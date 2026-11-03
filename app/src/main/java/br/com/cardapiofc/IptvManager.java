@@ -2,6 +2,7 @@ package br.com.cardapiofc;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.security.keystore.KeyGenParameterSpec;
@@ -107,12 +108,18 @@ public final class IptvManager {
 
     private void connectM3u(String playlistUrl, boolean showLoading) {
         final String url = playlistUrl == null ? "" : playlistUrl.trim();
+        String[] xtream = xtreamCredentialsFromPlaylist(url);
+        if (xtream != null) {
+            // get.php?username=...&password=... é a playlist Xtream; consulte a API
+            // JSON em vez de baixar a playlist M3U inteira e estourar o heap do Android.
+            connectXtream(xtream[0], xtream[1], xtream[2], showLoading);
+            return;
+        }
         if (showLoading) setLoading();
         executor.execute(() -> {
             try {
                 if (url.isEmpty()) throw new IOException("Informe o link M3U.");
-                String text = requestText(url);
-                List<Channel> channels = parseM3u(text);
+                List<Channel> channels = parseM3uUrl(url);
                 if (channels.isEmpty()) throw new IOException("Nenhum canal foi encontrado na playlist.");
                 save(new State("m3u", "", "", "", url, channels, "", -1, -1, "connected", ""));
             } catch (Throwable error) {
@@ -390,6 +397,27 @@ public final class IptvManager {
         if (!value.isEmpty() && !value.startsWith("http://") && !value.startsWith("https://")) value = "http://" + value;
         return value;
     }
+
+    /** Converte o formato de playlist Xtream get.php no mesmo fluxo JSON do login Xtream. */
+    private static String[] xtreamCredentialsFromPlaylist(String playlistUrl) {
+        if (playlistUrl == null || playlistUrl.isEmpty()) return null;
+        try {
+            Uri uri = Uri.parse(playlistUrl);
+            String path = uri.getPath();
+            String username = uri.getQueryParameter("username");
+            String password = uri.getQueryParameter("password");
+            String scheme = uri.getScheme();
+            String authority = uri.getAuthority();
+            if (path == null || !path.toLowerCase(Locale.ROOT).endsWith("get.php")
+                    || scheme == null || authority == null || authority.isEmpty()
+                    || username == null || username.trim().isEmpty() || password == null || password.isEmpty()) {
+                return null;
+            }
+            return new String[]{scheme + "://" + authority, username.trim(), password};
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
     private static String enc(String value) throws Exception { return URLEncoder.encode(value, "UTF-8"); }
 
     private static JSONObject requestJson(String url) throws Exception {
@@ -406,7 +434,7 @@ public final class IptvManager {
         HttpURLConnection connection = (HttpURLConnection) new URL(urlText).openConnection();
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS); connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setRequestProperty("Accept", "application/json, text/plain, */*");
-        connection.setRequestProperty("User-Agent", "CardapioFC/3.0 Android");
+        connection.setRequestProperty("User-Agent", "CardapioFC/4.1 Android");
         int code = connection.getResponseCode();
         InputStream input = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
         if (input == null) throw new IOException("Servidor sem resposta (HTTP " + code + ").");
@@ -433,17 +461,41 @@ public final class IptvManager {
 
     private static String encSafe(String value) { try { return enc(value); } catch (Exception e) { return value; } }
 
-    private static List<Channel> parseM3u(String text) {
-        List<Channel> result = new ArrayList<>(); String pendingName = ""; String pendingLogo = ""; String pendingId = "";
-        String[] lines = text.replace("\r", "").split("\n");
-        for (String raw : lines) {
-            String line = raw.trim();
-            if (line.startsWith("#EXTINF")) {
-                int comma = line.indexOf(','); pendingName = comma >= 0 ? line.substring(comma + 1).trim() : "";
-                pendingLogo = attr(line, "tvg-logo"); pendingId = attr(line, "tvg-id");
-            } else if (!line.isEmpty() && !line.startsWith("#") && !pendingName.isEmpty()) {
-                result.add(new Channel(pendingName, line, pendingLogo, pendingId)); pendingName = ""; pendingLogo = ""; pendingId = "";
+    /** Lê playlists grandes em streaming: evita manter o conteúdo bruto e um split gigante na memória. */
+    private static List<Channel> parseM3uUrl(String urlText) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(urlText).openConnection();
+        connection.setInstanceFollowRedirects(true);
+        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        connection.setReadTimeout(READ_TIMEOUT_MS);
+        connection.setRequestProperty("Accept", "audio/x-mpegurl, application/vnd.apple.mpegurl, text/plain, */*");
+        connection.setRequestProperty("Accept-Encoding", "identity");
+        connection.setRequestProperty("User-Agent", "CardapioFC/4.1 Android");
+        int code = connection.getResponseCode();
+        InputStream input = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        if (input == null) throw new IOException("Servidor sem resposta (HTTP " + code + ").");
+        if (code >= 400) {
+            try (InputStream ignored = input) { /* fecha o corpo antes de informar o erro */ }
+            finally { connection.disconnect(); }
+            throw new IOException("Servidor respondeu HTTP " + code + ".");
+        }
+        List<Channel> result = new ArrayList<>();
+        String pendingName = "", pendingLogo = "", pendingId = "";
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8), 8192)) {
+            String raw;
+            while ((raw = reader.readLine()) != null) {
+                String line = raw.trim();
+                if (line.startsWith("#EXTINF")) {
+                    int comma = line.indexOf(',');
+                    pendingName = comma >= 0 ? line.substring(comma + 1).trim() : "";
+                    pendingLogo = attr(line, "tvg-logo");
+                    pendingId = attr(line, "tvg-id");
+                } else if (!line.isEmpty() && !line.startsWith("#") && !pendingName.isEmpty()) {
+                    result.add(new Channel(pendingName, line, pendingLogo, pendingId));
+                    pendingName = ""; pendingLogo = ""; pendingId = "";
+                }
             }
+        } finally {
+            connection.disconnect();
         }
         return result;
     }
