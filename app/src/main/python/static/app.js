@@ -84,7 +84,8 @@
   }
 
   function isSupportedDate(value) {
-    return value === state.today || value === addDays(state.today, 1);
+    const supportedDates = Array.from({ length: 2 }, (_, offset) => addDays(state.today, offset));
+    return supportedDates.indexOf(value) !== -1;
   }
 
   function dateFromYmd(value) {
@@ -128,7 +129,7 @@
 
   function logoOrFallback(src, name, className) {
     return src
-      ? `<img class="${className}" src="${escapeHtml(src)}" data-fallback="${escapeHtml(initials(name))}" data-logo-class="${escapeHtml(className)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+      ? `<img class="${className}" src="${escapeHtml(src)}" data-fallback="${escapeHtml(initials(name))}" data-logo-class="${escapeHtml(className)}" alt="" loading="eager" decoding="async" referrerpolicy="no-referrer">`
       : `<span class="${className}-fallback ${className}" aria-hidden="true">${escapeHtml(initials(name))}</span>`;
   }
 
@@ -199,7 +200,7 @@
   }
 
   const FRONTEND_CACHE_TTL = 30 * 60 * 1000;
-  const FRONTEND_CACHE_VERSION = "v19";
+  const FRONTEND_CACHE_VERSION = "v23";
   const LIVE_POLL_INTERVAL_MS = 45_000;
   let liveStream = null;
   let liveStreamGeneration = 0;
@@ -271,6 +272,12 @@
     if (isLoading) stopLiveStream();
     refs.loading.classList.toggle("is-hidden", !isLoading);
     if (isLoading) {
+      const viewportHeight = window.visualViewport?.height || window.innerHeight || 800;
+      const estimatedHeader = 170;
+      const estimatedCard = 184;
+      const gap = 10;
+      const skeletonCount = Math.max(4, Math.ceil(Math.max(0, viewportHeight - estimatedHeader) / (estimatedCard + gap)) + 1);
+      refs.loading.innerHTML = Array.from({ length: skeletonCount }, () => '<div class="skeleton-card"></div>').join("");
       refs.empty.classList.add("is-hidden");
       refs.error.classList.add("is-hidden");
       refs.todayToolbar.classList.add("is-hidden");
@@ -285,7 +292,9 @@
     state.liveOnly = false;
     state.liveSnapshotReady = date !== state.today;
     state.autoScrollDone = false;
-    state.pendingScrollMode = scrollMode;
+    // Hoje sempre procura o ao vivo mais relevante ou o próximo jogo;
+    // qualquer outra data usa o comportamento de catálogo: voltar ao topo.
+    state.pendingScrollMode = date === state.today ? "today-nearest" : "top";
     refs.liveOnlyToggle.checked = false;
     renderDateRail();
     setLoading(true);
@@ -568,14 +577,7 @@
         clockDisplay: current.clockDisplay,
         period: current.period,
       };
-      const existingChannels = Array.isArray(current.channels) ? [...current.channels] : [];
       Object.assign(current, update);
-      if (existingChannels.length && (!Array.isArray(current.channels) || !current.channels.length || current.channels.includes("Canal não informado"))) {
-        current.channels = existingChannels;
-      }
-      if (current.match && existingChannels.length && (!Array.isArray(current.match.channels) || !current.match.channels.length)) {
-        current.match.channels = existingChannels;
-      }
       if (!card) {
         needsRender = true;
         return;
