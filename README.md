@@ -120,7 +120,7 @@ Python embutido (app.py)
 Clone o repositório e entre na pasta do projeto:
 
 ```bash
-    git clone https://github.com/Nekyl/CardapioFC.git
+git clone https://github.com/Nekyl/CardapioFC.git
 cd CardapioFC
 ```
 
