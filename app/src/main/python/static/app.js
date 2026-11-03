@@ -17,6 +17,8 @@
     leagueCatalog: [],
     selectedMatch: null,
     liveOnly: false,
+    iptvMode: "xtream",
+    iptvPoll: null,
     requestId: 0,
     liveSnapshotReady: false,
     autoScrollDone: false,
@@ -39,9 +41,16 @@
     modalTitle: document.querySelector("#match-modal-title"),
     modalMeta: document.querySelector("#match-modal-meta"),
     broadcastList: document.querySelector("#broadcast-list"),
+    broadcastBackButton: document.querySelector("#broadcast-back-button"),
     todayToolbar: document.querySelector("#today-toolbar"),
     stickyLeagueName: document.querySelector("#sticky-league-name"),
     liveOnlyToggle: document.querySelector("#live-only-toggle"),
+    iptvDialog: document.querySelector("#iptv-dialog"),
+    iptvStatusLine: document.querySelector("#iptv-status-line"),
+    iptvLoginForm: document.querySelector("#iptv-login-form"),
+    iptvConnectedActions: document.querySelector("#iptv-connected-actions"),
+    iptvXtreamFields: document.querySelector("#iptv-xtream-fields"),
+    iptvM3uFields: document.querySelector("#iptv-m3u-fields"),
   };
 
   function escapeHtml(value) {
@@ -51,6 +60,90 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+  function nativeIptv() { return window.CardapioIPTV || null; }
+  function readIptvStatus() {
+    try { return JSON.parse(nativeIptv()?.getStatusJson?.() || "{}"); } catch (_) { return {}; }
+  }
+  function syncIptvUi() {
+    const status = readIptvStatus();
+    const count = Array.isArray(status.channels) ? status.channels.length : 0;
+    if (status.status === "loading") refs.iptvStatusLine.textContent = "Carregando canais...";
+    else if (status.status === "error") refs.iptvStatusLine.textContent = status.error || "Não foi possível carregar a lista.";
+    else if (status.status === "connected") {
+      const connections = status.active >= 0 && status.max >= 0 ? ` · Conexões: ${status.active}/${status.max}` : "";
+      const expiry = status.expiry ? ` · Validade: ${status.expiry}` : "";
+      refs.iptvStatusLine.textContent = `${count} canais${connections}${expiry}`;
+    } else refs.iptvStatusLine.textContent = "Nenhuma lista conectada.";
+    const connected = status.status === "connected";
+    refs.iptvLoginForm.classList.toggle("is-hidden", connected);
+    refs.iptvConnectedActions.classList.toggle("is-hidden", !connected);
+    if (state.selectedMatch && !refs.matchModal.classList.contains("is-hidden")) showMatch(state.selectedMatch);
+    if (status.status !== "loading" && state.iptvPoll) { clearInterval(state.iptvPoll); state.iptvPoll = null; }
+  }
+  function beginIptvPoll() {
+    if (state.iptvPoll) clearInterval(state.iptvPoll);
+    syncIptvUi(); state.iptvPoll = setInterval(syncIptvUi, 700);
+  }
+  function showIptv() { syncIptvUi(); refs.iptvDialog.classList.remove("is-hidden"); document.body.classList.add("modal-open"); }
+  function hideIptv() { refs.iptvDialog.classList.add("is-hidden"); if (state.iptvPoll) { clearInterval(state.iptvPoll); state.iptvPoll = null; } if (refs.matchModal.classList.contains("is-hidden") && refs.leagueDrawer.classList.contains("is-hidden")) document.body.classList.remove("modal-open"); }
+  function streamForChannel(channel) {
+    try {
+      const raw = nativeIptv()?.findStreams?.(channel);
+      if (raw) return JSON.parse(raw) || [];
+      const one = JSON.parse(nativeIptv()?.findStream?.(channel) || "{}");
+      return one.url ? [one] : [];
+    } catch (_) { return []; }
+  }
+  function suggestedStreamsForMatch(match) {
+    try {
+      const raw = nativeIptv()?.findSuggestedStreams?.(match.home?.name || "", match.away?.name || "");
+      return JSON.parse(raw || "[]") || [];
+    } catch (_) { return []; }
+  }
+  function broadcastMarkup(channel) {
+    const streams = streamForChannel(channel); const playable = streams.length > 0;
+    const attrs = playable ? ` data-play-options="${escapeHtml(JSON.stringify(streams))}" data-play-title="${escapeHtml(channel)}"` : "";
+    return `<li class="broadcast-item${playable ? " is-playable" : ""}"${attrs}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6M8 6v12M12 3v18M16 7v10M20 10v4" /></svg><span>${escapeHtml(channel)}</span>${playable ? '<span class="broadcast-live-dot" title="Disponível na sua lista"></span>' : ""}</li>`;
+  }
+
+  function streamOptionMarkup(stream, title) {
+    const name = stream.name || title;
+    const marker = stream.suggested
+      ? '<span class="broadcast-suggested-tag">SUGERIDO</span>'
+      : '<span class="broadcast-live-dot" title="Disponível na sua lista"></span>';
+    return `<li class="broadcast-item is-playable${stream.suggested ? " is-suggested" : ""}" data-stream-option data-stream-search="${escapeHtml(normalizeStreamSearch(name))}" data-play-url="${escapeHtml(stream.url || "")}" data-play-title="${escapeHtml(name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6M8 6v12M12 3v18M16 7v10M20 10v4" /></svg><span>${escapeHtml(name)}</span>${marker}</li>`;
+  }
+
+  function normalizeStreamSearch(value) {
+    return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+  }
+
+  function showStreamChoices(playable, streams) {
+    const panel = refs.matchModal.querySelector(".match-modal-panel");
+    const currentHeight = panel.getBoundingClientRect().height;
+    const availableHeight = Math.max(220, window.innerHeight - 12);
+    panel.style.height = `${Math.min(availableHeight, Math.max(currentHeight, 470))}px`;
+    panel.classList.add("has-stream-choices");
+    refs.broadcastList.classList.add("has-stream-choices");
+    refs.broadcastBackButton.classList.remove("is-hidden");
+    const needsSearch = streams.length > 4;
+    const searchMarkup = needsSearch
+      ? `<li class="broadcast-search-row"><input id="broadcast-search" type="search" autocomplete="off" placeholder="Pesquisar canal na lista" aria-label="Pesquisar canal na lista"></li>`
+      : "";
+    refs.broadcastList.innerHTML = `<li class="broadcast-variant-heading">Selecione o canal disponível</li>${searchMarkup}${streams.map((stream) => streamOptionMarkup(stream, playable.dataset.playTitle || "")).join("")}<li id="broadcast-no-results" class="broadcast-no-results is-hidden">Nenhum canal encontrado.</li>`;
+    const input = document.querySelector("#broadcast-search");
+    if (input) input.addEventListener("input", () => {
+      const query = normalizeStreamSearch(input.value);
+      let visibleCount = 0;
+      refs.broadcastList.querySelectorAll("[data-stream-option]").forEach((option) => {
+        const visible = !query || option.dataset.streamSearch.includes(query);
+        option.classList.toggle("is-hidden", !visible);
+        if (visible) visibleCount += 1;
+      });
+      document.querySelector("#broadcast-no-results")?.classList.toggle("is-hidden", visibleCount > 0);
+    });
   }
 
   function getInitialDate() {
@@ -606,15 +699,9 @@
     updateStickyLeague();
     if (!hadLiveBefore) {
       const liveTarget = chooseAutoScrollMatch((state.data?.matches || []).filter((match) => match.status === "live" || match.status === "halftime"));
-      if (liveTarget) {
+      if (liveTarget && !(state.date === state.today && state.pendingScrollMode === "today-nearest")) {
         state.autoScrollDone = true;
         scrollToMatch(liveTarget);
-      } else if (state.liveSnapshotReady && !state.autoScrollDone && state.date === state.today) {
-        const nextTarget = chooseAutoScrollMatch(state.data?.matches || []);
-        if (nextTarget) {
-          state.autoScrollDone = true;
-          scrollToMatch(nextTarget);
-        }
       }
     }
   }
@@ -625,9 +712,7 @@
       if (generation !== liveStreamGeneration) return;
       state.liveSnapshotReady = true;
       applyLiveUpdates({
-        matches: (payload.matches || [])
-          .filter((match) => match.status === "live" || match.status === "halftime")
-          .map((match) => ({
+        matches: (payload.matches || []).map((match) => ({
             id: match.id,
             score: match.score,
             status: match.status,
@@ -635,29 +720,27 @@
             clockSeconds: match.clockSeconds,
             clockDisplay: match.clockDisplay,
             period: match.period,
+            kickoffIso: match.kickoffIso,
+            kickoff: match.kickoff,
+            date: match.date,
             match,
           })),
       });
-      if (!state.autoScrollDone && state.date === state.today) {
-        const target = chooseAutoScrollMatch(state.data?.matches || []);
-        if (target) {
-          state.autoScrollDone = true;
-          scrollToMatch(target);
-        }
-      }
+      completePendingTodayScroll();
     } catch (error) {
       console.warn("Não foi possível carregar o snapshot ao vivo", error);
       if (generation === liveStreamGeneration) {
         state.liveSnapshotReady = true;
-        if (!state.autoScrollDone && state.date === state.today) {
-          const nextTarget = chooseAutoScrollMatch(state.data?.matches || []);
-          if (nextTarget) {
-            state.autoScrollDone = true;
-            scrollToMatch(nextTarget);
-          }
-        }
+        completePendingTodayScroll();
       }
     }
+  }
+
+  function completePendingTodayScroll() {
+    if (state.date !== state.today || !state.liveSnapshotReady || state.pendingScrollMode !== "today-nearest") return;
+    state.pendingScrollMode = "";
+    state.autoScrollDone = true;
+    scrollToNearestTodayMatch(state.data?.matches || []);
   }
 
   function startLiveStream() {
@@ -709,8 +792,7 @@
 
   function chooseAutoScrollMatch(matches) {
     const ordered = chronologicalMatches(matches)
-      .map((match) => ({ match, timestamp: kickoffTimestamp(match) }))
-      .filter((item) => Number.isFinite(item.timestamp));
+      .map((match) => ({ match, timestamp: kickoffTimestamp(match) }));
     if (!ordered.length) return null;
 
     // A partida ao vivo sempre tem prioridade, independentemente do horário.
@@ -719,12 +801,11 @@
 
     // Sem partida ao vivo, escolhe o próximo jogo agendado mais próximo de agora.
     const now = Date.now();
-    const nextScheduled = ordered.find(({ match, timestamp }) => match.status === "scheduled" && timestamp >= now);
+    const nextScheduled = ordered.find(({ match, timestamp }) => match.status === "scheduled" && Number.isFinite(timestamp) && timestamp >= now);
     if (nextScheduled) return nextScheduled.match;
 
-    // Se todos os jogos já passaram, mantém o último agendado como fallback.
-    const lastScheduled = [...ordered].reverse().find(({ match }) => match.status === "scheduled");
-    return lastScheduled?.match || ordered[0].match;
+    // Sem partidas em andamento ou futuras, não rola até partidas encerradas/passadas.
+    return null;
   }
 
   function scrollToNearestTodayMatch(matches) {
@@ -762,11 +843,15 @@
     if (isLeaguesTab) scrollToFirstLeagueDayMatch(selected);
     else if (state.pendingScrollMode) {
       const scrollMode = state.pendingScrollMode;
-      state.pendingScrollMode = "";
-      state.autoScrollRequested = false;
-      state.autoScrollDone = true;
-      if (scrollMode === "top") scrollToTop();
-      else scrollToNearestTodayMatch(selected);
+      if (scrollMode === "today-nearest" && !state.liveSnapshotReady) {
+        state.autoScrollRequested = false;
+      } else {
+        state.pendingScrollMode = "";
+        state.autoScrollRequested = false;
+        state.autoScrollDone = true;
+        if (scrollMode === "top") scrollToTop();
+        else scrollToNearestTodayMatch(selected);
+      }
     } else if (state.autoScrollRequested) {
       state.autoScrollRequested = false;
       state.autoScrollDone = true;
@@ -798,12 +883,35 @@
     refs.modalLeague.textContent = match.league || "";
     refs.modalTitle.textContent = `${match.home?.name || "?"} x ${match.away?.name || "?"}`;
     refs.modalMeta.textContent = `${match.kickoff || "—"}${match.venue ? ` · ${match.venue}` : ""}`;
-    const channels = isSupportedDate(String(match.date || "")) ? (match.channels || []) : [];
-    refs.broadcastList.innerHTML = channels.length
-      ? channels.map((channel) => `<li class="broadcast-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6M8 6v12M12 3v18M16 7v10M20 10v4" /></svg>${escapeHtml(channel)}</li>`).join("")
-      : `<li class="broadcast-item broadcast-unavailable">Canais não informados para esta data.</li>`;
+    resetBroadcastChoices();
+    refs.broadcastList.innerHTML = matchBroadcastMarkup(match);
     refs.matchModal.classList.remove("is-hidden");
     document.body.classList.add("modal-open");
+  }
+
+  function matchBroadcastMarkup(match) {
+    const supportedDate = isSupportedDate(String(match.date || ""));
+    const channels = supportedDate ? (match.channels || []) : [];
+    const suggested = supportedDate ? suggestedStreamsForMatch(match) : [];
+    const suggestionsMarkup = suggested.map((stream) => streamOptionMarkup({ ...stream, suggested: true }, stream.name || "")).join("");
+    const channelsMarkup = channels.map(broadcastMarkup).join("");
+    return suggestionsMarkup || channelsMarkup
+      ? `${suggestionsMarkup}${channelsMarkup}`
+      : `<li class="broadcast-item broadcast-unavailable">Canais não informados para esta data.</li>`;
+  }
+
+  function resetBroadcastChoices() {
+    const panel = refs.matchModal.querySelector(".match-modal-panel");
+    panel.classList.remove("has-stream-choices");
+    panel.style.height = "";
+    refs.broadcastList.classList.remove("has-stream-choices");
+    refs.broadcastBackButton.classList.add("is-hidden");
+  }
+
+  function backToInitialChannels() {
+    if (!state.selectedMatch) return;
+    resetBroadcastChoices();
+    refs.broadcastList.innerHTML = matchBroadcastMarkup(state.selectedMatch);
   }
 
   function hideMatch() {
@@ -867,7 +975,42 @@
 
   document.addEventListener("click", (event) => {
     const target = event.target.closest("button");
+    const playable = event.target.closest(".broadcast-item.is-playable");
+    if (playable?.dataset.playOptions) {
+      let streams = [];
+      try { streams = JSON.parse(playable.dataset.playOptions) || []; } catch (_) { streams = []; }
+      if (streams.length > 1) {
+        showStreamChoices(playable, streams);
+      } else if (streams[0]?.url) {
+        nativeIptv()?.playStream?.(streams[0].url, streams[0].name || playable.dataset.playTitle || "");
+      }
+      return;
+    }
+    if (playable?.dataset.playUrl) {
+      nativeIptv()?.playStream?.(playable.dataset.playUrl, playable.dataset.playTitle || "");
+      return;
+    }
     if (!target) return;
+    if (target.dataset.action === "back-to-channels") { backToInitialChannels(); return; }
+    if (target.dataset.iptvMode) {
+      state.iptvMode = target.dataset.iptvMode;
+      document.querySelectorAll("[data-iptv-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.iptvMode === state.iptvMode));
+      refs.iptvXtreamFields.classList.toggle("is-hidden", state.iptvMode !== "xtream");
+      refs.iptvM3uFields.classList.toggle("is-hidden", state.iptvMode !== "m3u");
+      return;
+    }
+    if (target.dataset.action === "open-iptv") { showIptv(); return; }
+    if (target.dataset.action === "close-iptv") { hideIptv(); return; }
+    if (target.dataset.action === "connect-iptv") {
+      if (state.iptvMode === "m3u") nativeIptv()?.connectM3u?.(document.querySelector("#iptv-m3u")?.value || "");
+      else nativeIptv()?.connectXtream?.(document.querySelector("#iptv-server")?.value || "", document.querySelector("#iptv-user")?.value || "", document.querySelector("#iptv-password")?.value || "");
+      beginIptvPoll(); return;
+    }
+    if (target.dataset.action === "refresh-iptv") {
+      nativeIptv()?.refresh?.();
+      beginIptvPoll(); return;
+    }
+    if (target.dataset.action === "disconnect-iptv") { nativeIptv()?.disconnect?.(); syncIptvUi(); return; }
     if (target.dataset.date) {
       const scrollMode = target.dataset.date === state.today ? "today-nearest" : "top";
       loadDate(target.dataset.date, scrollMode);

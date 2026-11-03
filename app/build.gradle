@@ -3,53 +3,60 @@ plugins {
     id 'com.chaquo.python'
 }
 
-def signingPropertiesFile = rootProject.file('signing.properties')
 def universalApk = project.hasProperty('universal')
-def signingProperties = new Properties()
-if (signingPropertiesFile.exists()) {
-    signingPropertiesFile.withInputStream { signingProperties.load(it) }
-}
-def hasReleaseSigning = signingPropertiesFile.exists()
 
 android {
     namespace 'br.com.cardapiofc'
     compileSdk 35
+
     defaultConfig {
         applicationId 'br.com.cardapiofc'
         minSdk 26
         targetSdk 35
-        versionCode 110
-        versionName '3.0'
+        versionCode 112
+        versionName '4.0'
         ndk {
+            // Padrão compacto ARM64; use -Puniversal para incluir também x86_64.
             if (universalApk) abiFilters 'arm64-v8a', 'x86_64'
             else abiFilters 'arm64-v8a'
         }
     }
+
     signingConfigs {
         release {
-            if (hasReleaseSigning) {
-                storeFile rootProject.file(signingProperties['storeFile'])
-                storePassword signingProperties['storePassword']
-                keyAlias signingProperties['keyAlias']
-                keyPassword signingProperties['keyPassword']
-            }
+            storeFile rootProject.file('cardapio-zero.jks')
+            storePassword 'cardapiofc-zero'
+            keyAlias 'cardapiofc-zero'
+            keyPassword 'cardapiofc-zero'
         }
     }
+
     buildTypes {
         release {
-            if (hasReleaseSigning) signingConfig signingConfigs.release
+            signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
     packagingOptions {
-        jniLibs { useLegacyPackaging true }
+        jniLibs {
+            // Compacta os .so no APK; o Android os extrai normalmente na instalação.
+            useLegacyPackaging true
+        }
     }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    implementation 'androidx.media3:media3-exoplayer:1.5.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.5.1'
+    implementation 'androidx.media3:media3-ui:1.5.1'
 }
 
 chaquopy {
