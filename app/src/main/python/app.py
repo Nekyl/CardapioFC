@@ -31,7 +31,7 @@ API_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 REQUEST_TIMEOUT = 15
 LIVE_REFRESH_INTERVAL_SECONDS = 45
 SQLITE_CACHE_TTL = 24 * 60 * 60
-CACHE_NAMESPACE = "v22"
+CACHE_NAMESPACE = "v25"
 SQLITE_CACHE_PATH = BASE_DIR / "games_cache.sqlite3"
 CHANNEL_SCRAPER_TTL = 4 * 60 * 60
 CHANNEL_SCRAPER_URLS = (
@@ -173,9 +173,11 @@ def date_offset(ymd: str, days: int) -> str:
     return value.isoformat()
 
 
-def channel_lookup_dates() -> tuple[str, str]:
+def channel_lookup_dates() -> tuple[str, ...]:
     today = today_sao_paulo()
-    return today, date_offset(today, 1)
+    # A grade pública usada pelo scraper cobre somente hoje e amanhã.
+    # Datas posteriores permanecem no calendário, mas sem clique de canais.
+    return tuple(date_offset(today, offset) for offset in range(2))
 
 
 def is_channel_lookup_date(ymd: str) -> bool:
@@ -233,6 +235,10 @@ def normalize_channel_label(value: Any) -> str:
     if not cleaned:
         return ""
     upper = cleaned.upper()
+    # O site diferencia a Globo nacional das afiliadas regionais
+    # (GLOBO MG, GLOBO SP etc.). Preserve o rótulo recebido sem reduzi-lo.
+    if upper == "GLOBO" or upper.startswith("GLOBO "):
+        return cleaned
     # O Futebol na TV diferencia os subcanais e envia estes nomes no markup.
     # Preserve a identificação em vez de reduzir tudo a ESPN/SporTV/Premiere.
     for prefix, display in (("SPORTV", "SporTV"), ("PREMIERE", "Premiere"), ("ESPN", "ESPN")):
@@ -253,21 +259,6 @@ def normalize_channel_label(value: Any) -> str:
     return cleaned
 
 
-def channels_from_espn(broadcasts: Any) -> list[str]:
-    channels: list[str] = []
-    for broadcast in broadcasts or []:
-        if not isinstance(broadcast, dict):
-            continue
-        names = broadcast.get("names") or []
-        if isinstance(names, str):
-            names = [names]
-        for name in names:
-            value = normalize_channel_label(name)
-            if value and not is_non_channel_service(value) and value not in channels:
-                channels.append(value)
-    return channels
-
-
 def channel_identity(value: str) -> str:
     return normalize_name(value).replace(" disney ", " disney plus ").strip()
 
@@ -278,19 +269,6 @@ NON_CHANNEL_SERVICE_IDENTITIES = {"youtube", "youtube tv", "onefootball", "ppv",
 def is_non_channel_service(value: str) -> bool:
     identity = channel_identity(value)
     return identity in NON_CHANNEL_SERVICE_IDENTITIES or identity.startswith("ppv ") or " onefootball" in identity
-
-
-def combine_channel_sources(espn_channels: list[str], scraped_channels: list[str]) -> list[str]:
-    """Combina ESPN e scraper, mantendo somente nomes que representam canais."""
-    all_channels: list[str] = []
-    for channel in [*espn_channels, *scraped_channels]:
-        if is_non_channel_service(channel):
-            continue
-        identity = channel_identity(channel)
-        if not identity or identity in {channel_identity(item) for item in all_channels}:
-            continue
-        all_channels.append(channel)
-    return all_channels
 
 
 class FallbackScraper:
@@ -537,7 +515,7 @@ fallback_scraper = FallbackScraper()
 def preload_channel_schedule() -> None:
     try:
         if fallback_scraper.refresh():
-            print("[Scraper] Grade de hoje e amanhã pré-carregada em cache")
+            print("[Scraper] Grade de hoje até D+6 pré-carregada em cache")
         else:
             print("[Scraper] Não foi possível pré-carregar a grade de canais")
     except Exception as error:  # pragma: no cover - proteção do ciclo de inicialização
@@ -545,18 +523,13 @@ def preload_channel_schedule() -> None:
 
 
 def channels_for_match(slug: str, home: str, away: str, match_date: str, broadcasts: Any = None) -> list[str]:
-    espn_channels = channels_from_espn(broadcasts)
     if not is_channel_lookup_date(match_date):
-        return ["Canal não informado"]
+        return []
 
+    # Os canais vêm exclusivamente do Futebol na TV. A ESPN continua sendo
+    # usada para placar/status, mas não serve como fallback de transmissão.
     scraped_channels = fallback_scraper.get_channels(home, away)
-    combined_channels = combine_channel_sources(espn_channels, scraped_channels)
-    if espn_channels and scraped_channels and combined_channels != espn_channels:
-        print(
-            f"[Canais] ESPN + scraper para {home} x {away}; "
-            f"resultado={combined_channels}"
-        )
-    return combined_channels or ["Canal não informado"]
+    return scraped_channels
 
 
 def image_url(value: Any) -> str | None:

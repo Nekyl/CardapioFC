@@ -2,6 +2,17 @@
 
 Aplicativo Android para consultar partidas de futebol, horários, placares, competições e canais de transmissão em um único lugar.
 
+[![Última release](https://img.shields.io/github/v/release/Nekyl/CardapioFC?display_name=tag&sort=semver)](https://github.com/Nekyl/CardapioFC/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Nekyl/CardapioFC/total)](https://github.com/Nekyl/CardapioFC/releases)
+
+## Download
+
+Baixe a versão mais recente diretamente na página de releases do GitHub:
+
+**[Baixar a versão mais recente do Cardápio FC](https://github.com/Nekyl/CardapioFC/releases/latest)**
+
+Cada release pode incluir duas variantes: a **ARM64**, menor e indicada para a maioria dos celulares Android atuais, e a **universal**, que também inclui `x86_64` para emuladores e dispositivos compatíveis.
+
 O Cardápio FC possui uma interface nativa baseada em WebView e um backend Python embutido no próprio APK. Dessa forma, o usuário não precisa instalar Python, configurar um servidor local ou informar o IP de outro computador.
 
 > O aplicativo é autocontido quanto ao código e ao backend, mas precisa de conexão com a internet para buscar os dados atualizados das partidas.
@@ -19,6 +30,18 @@ O Cardápio FC possui uma interface nativa baseada em WebView e um backend Pytho
 - Interface responsiva para celulares Android.
 - Compatibilidade com WebViews mais antigos, incluindo aparelhos como Galaxy S9.
 - Backend Python executado dentro do APK, sem servidor externo do usuário.
+
+## Screenshots
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center" valign="top"><img src="docs/screenshots/ao-vivo.jpg" alt="Lista de partidas ao vivo" width="250"><br><sub>Partidas ao vivo</sub></td>
+      <td align="center" valign="top"><img src="docs/screenshots/ligas.jpg" alt="Seleção de ligas" width="250"><br><sub>Ligas e competições</sub></td>
+      <td align="center" valign="top"><img src="docs/screenshots/onde-assistir.jpg" alt="Canais onde assistir" width="250"><br><sub>Onde assistir</sub></td>
+    </tr>
+  </table>
+</div>
 
 ## Como funciona
 
@@ -66,7 +89,7 @@ Python embutido (app.py)
 Clone o repositório e entre na pasta do projeto:
 
 ```bash
-git https://github.com/Nekyl/CardapioFC.git
+    git clone https://github.com/Nekyl/CardapioFC.git
 cd CardapioFC
 ```
 
@@ -104,9 +127,15 @@ A keystore não faz parte do repositório público. Para assinar localmente, cop
 cp signing.properties.example signing.properties
 ```
 
-Edite `signing.properties` com os dados da sua keystore e coloque o arquivo `.jks` no caminho indicado.
+Edite `signing.properties` com os dados da sua keystore e coloque o arquivo `.jks` no caminho indicado. Esses arquivos estão no `.gitignore` e não devem ser enviados ao GitHub.
+
+Nunca publique a keystore nem as senhas de assinatura. A mesma keystore deve ser preservada para lançar atualizações compatíveis do aplicativo já instalado.
 
 ## Compatibilidade
+
+A configuração pública atual gera apenas a arquitetura `arm64-v8a`, que atende à maioria dos aparelhos Android modernos, independentemente de o processador ser Snapdragon, MediaTek, Exynos, Kirin, Tensor ou Unisoc.
+
+A versão atual não inclui bibliotecas para `armeabi-v7a`, `x86` ou `x86_64`. Para suportar aparelhos exclusivamente 32-bit ou emuladores x86, é necessário adicionar essas ABIs no `app/build.gradle`, aumentando o tamanho final do APK.
 
 O projeto usa `minSdk 26`, equivalente ao Android 8.0.
 
@@ -133,4 +162,3 @@ O projeto não garante que todas as partidas ou transmissões estarão disponív
 ## Privacidade
 
 O aplicativo não precisa de uma conta para consultar os jogos. As requisições necessárias são feitas para as fontes externas configuradas no `app.py`. O cache local é armazenado no espaço privado do aplicativo.
-
