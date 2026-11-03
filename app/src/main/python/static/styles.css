@@ -125,7 +125,7 @@ svg { display: block; }
 .broadcast-list { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; max-height: clamp(140px, 34dvh, 320px); gap: 8px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; margin: 0; padding: 0 2px 0 0; list-style: none; scrollbar-color: #d6d8dc transparent; scrollbar-width: thin; }
 .match-modal-panel.has-stream-choices { display: flex; max-height: calc(100dvh - 12px); flex-direction: column; overflow: hidden; }
 .broadcast-list.has-stream-choices { min-height: 0; max-height: 270px; flex: 1 1 auto; overflow-y: auto; }
-.broadcast-item { display: flex; width: 100%; min-width: 0; align-items: center; gap: 12px; overflow: hidden; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); font-size: 13px; font-weight: 700; }
+.broadcast-item { display: flex; width: 100%; min-width: 0; height: 48px; min-height: 48px; max-height: 48px; align-items: center; gap: 12px; overflow: hidden; padding: 0 14px; border-radius: 12px; background: var(--surface-2); font-size: 13px; font-weight: 700; }
 .broadcast-item > span:not(.broadcast-live-dot):not(.broadcast-suggested-tag) { width: 0; min-width: 0; flex: 1 1 0%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .broadcast-item svg { width: 18px; height: 18px; flex: 0 0 18px; fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .broadcast-variant-heading { padding: 4px 2px 2px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
