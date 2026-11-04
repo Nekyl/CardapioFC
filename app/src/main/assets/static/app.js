@@ -247,7 +247,8 @@
   function matchPhaseRank(match) {
     if (match?.status === "finished") return 0;
     if (match?.status === "live" || match?.status === "halftime") return 1;
-    if (match?.status === "scheduled") return 2;
+    // Adiados entram na mesma faixa dos agendados e ordenam por horário.
+    if (match?.status === "scheduled" || match?.status === "postponed") return 2;
     return 3;
   }
 
@@ -293,7 +294,7 @@
   }
 
   const FRONTEND_CACHE_TTL = 30 * 60 * 1000;
-  const FRONTEND_CACHE_VERSION = "v23";
+  const FRONTEND_CACHE_VERSION = "v24";
   const LIVE_POLL_INTERVAL_MS = 45_000;
   let liveStream = null;
   let liveStreamGeneration = 0;
