@@ -3,6 +3,7 @@ package br.com.cardapiofc;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.util.Log;
 import android.os.Handler;
 import android.os.Looper;
 import android.security.keystore.KeyGenParameterSpec;
@@ -232,7 +233,27 @@ public final class IptvManager {
         for (Channel channel : state.channels) {
             if (ChannelMatcher.matchesNormalized(query, channel.searchName)) result.put(channel.toJson());
         }
+        // Segunda passada (só afeta o CazéTV): listas sem a variante "CAZÉ TV HD I..VIII".
+        if (result.length() == 0) {
+            for (Channel channel : state.channels) {
+                if (ChannelMatcher.matchesNormalized(query, channel.searchName, true)) result.put(channel.toJson());
+            }
+        }
+        if (result.length() == 0) logMiss(query);
         return result;
+    }
+
+    /** Diagnóstico (logcat, tag CardapioIPTV): mostra canais parecidos quando o rótulo não encontra nada. */
+    private void logMiss(String query) {
+        try {
+            String first = query.split(" ")[0];
+            StringBuilder similar = new StringBuilder();
+            int shown = 0;
+            for (Channel channel : state.channels) {
+                if (channel.searchName.contains(first) && shown++ < 8) similar.append(" [").append(channel.name).append(" => ").append(channel.searchName).append("]");
+            }
+            Log.d("CardapioIPTV", "Sem canal para '" + query + "'. Parecidos:" + (shown == 0 ? " nenhum" : similar.toString()));
+        } catch (Throwable ignored) { }
     }
 
     private synchronized String cacheSearchResult(String key, String result) {
