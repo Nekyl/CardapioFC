@@ -225,16 +225,33 @@ CHANNEL_KEYWORDS: tuple[tuple[str, str], ...] = (
 )
 
 
+# Palavras que acompanham o nome base antes do número do subcanal:
+# "Prime Video 2" e "Cazé TV 2" não podem perder o número só porque o
+# rótulo completo é mais longo que a palavra-chave ("prime", "cazé").
+KEYWORD_OPTIONAL_SUFFIX: dict[str, str] = {
+    "prime": r"(?:\s+video)?",
+    "cazé": r"(?:\s*tv)?",
+}
+
+
 def channel_keyword_pattern(keyword: str) -> re.Pattern[str]:
     escaped = re.escape(keyword).replace(r"\ ", r"\s+")
-    return re.compile(rf"(?<!\w){escaped}(?:(?:\s*[-/]?\s*)(\d{{1,2}}))?(?!\w)", re.IGNORECASE)
+    suffix = KEYWORD_OPTIONAL_SUFFIX.get(keyword, "")
+    return re.compile(rf"(?<!\w){escaped}{suffix}(?:(?:\s*[-/]?\s*)(\d{{1,2}}))?(?!\w)", re.IGNORECASE)
 
 
 def normalize_channel_label(value: Any) -> str:
     cleaned = re.sub(r"\s+", " ", str(value or "")).strip()
+    # Texto em markdown "[GE TV](https://...)": fica só o nome do canal.
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", cleaned).strip()
     if not cleaned:
         return ""
     upper = cleaned.upper()
+    # OneFootball é canal de lista (OneFootball 01..04): preserva o número.
+    one_football = re.fullmatch(r"one\s*football(?:\s*[-/]?\s*(\d{1,2}))?", cleaned, flags=re.IGNORECASE)
+    if one_football:
+        number = one_football.group(1)
+        return f"OneFootball {int(number)}" if number else "OneFootball"
     # O site diferencia a Globo nacional das afiliadas regionais
     # (GLOBO MG, GLOBO SP etc.). Preserve o rótulo recebido sem reduzi-lo.
     if upper == "GLOBO" or upper.startswith("GLOBO "):
@@ -263,7 +280,7 @@ def channel_identity(value: str) -> str:
     return normalize_name(value).replace(" disney ", " disney plus ").strip()
 
 
-NON_CHANNEL_SERVICE_IDENTITIES = {"youtube", "youtube tv", "onefootball", "ppv", "ppv onefootball"}
+NON_CHANNEL_SERVICE_IDENTITIES = {"youtube", "youtube tv", "ppv", "ppv onefootball"}
 
 
 def is_non_channel_service(value: str) -> bool:

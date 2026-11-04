@@ -10,9 +10,9 @@ import java.util.Locale;
  *
  * <p>O padrão das listas é sempre o mesmo: um nome base com variações de
  * numeração e sufixo (SPORTV 2, CAZÉ TV 1..10, PRIME VIDEO 9 HD,
- * PARAMOUNT - FUTEBOL, HBO MAX...). O rótulo do app vem sem essas variações
- * ("CazéTV", "Prime Video", "Max"), então a comparação precisa tolerar
- * espaçamento, número de subcanal e sufixos descritivos.
+ * PARAMOUNT - FUTEBOL, HBO MAX...). O número de subcanal é exato: rótulo sem
+ * número equivale ao canal 1 (ou sem número) e rótulo com número só casa com
+ * esse mesmo número. Espaçamento e sufixos descritivos são tolerados.
  */
 final class ChannelMatcher {
     private ChannelMatcher() {}
@@ -22,37 +22,166 @@ final class ChannelMatcher {
     }
 
     static boolean matchesNormalized(String a, String b) {
+        return matchesNormalized(a, b, false);
+    }
+
+    /**
+     * @param lenient segunda passada, usada quando a regra estrita não achou nada na lista:
+     *                aceita o CazéTV sem numeral romano (listas que só têm "CAZE TV FHD").
+     */
+    static boolean matchesNormalized(String a, String b, boolean lenient) {
         if (a.isEmpty() || b.isEmpty()) return false;
+        // CazéTV: preferência pela variante de esporte com numeral romano (CAZÉ TV HD I..VIII).
+        // Só se a lista não tiver nenhuma (segunda passada), vale o número exato (sem número = 1).
+        if (isCaze(a) && isCaze(b)) return matchesCaze(a, b, lenient);
         if (a.equals(b)) return true;
         // Famílias com regra própria decidem primeiro; se a regra não aceitar,
         // a comparação genérica continua valendo para todas as listas.
         if (isNamedChannel(a, "PREMIERE") && isNamedChannel(b, "PREMIERE") && matchesPremiere(a, b)) return true;
-        if (isNamedChannel(a, "PARAMOUNT") && isNamedChannel(b, "PARAMOUNT") && matchesParamount(a, b)) return true;
+        // Paramount+ (esportes) nunca casa com o "Paramount Channel" (canal de filmes).
+        if (isNamedChannel(a, "PARAMOUNT") && isNamedChannel(b, "PARAMOUNT")) return matchesParamount(a, b);
         // Globo mantém a regra de região exclusiva (nunca cai na genérica).
         if (isNamedChannel(a, "GLOBO") && isNamedChannel(b, "GLOBO")) return matchesGlobo(a, b);
         return matchesLoose(a, b);
     }
 
-    /** Comparação genérica que vale para qualquer canal de qualquer lista. */
+    /**
+     * Comparação genérica que vale para qualquer canal de qualquer lista.
+     *
+     * <p>Regra do número de variante: o rótulo sem número equivale ao canal 1
+     * (ou ao canal da lista sem número); um rótulo com número só casa com o
+     * mesmo número. Ex.: "PRIME VIDEO" casa com "PRIME VIDEO 1 HD" e com
+     * "PRIME VIDEO", mas nunca com "PRIME VIDEO 2 HD"; "ESPN 2" casa só com
+     * "ESPN 2". O restante do nome (sem o número) tolera espaçamento e sufixos
+     * descritivos.
+     */
     private static boolean matchesLoose(String a, String b) {
         // Canais fixo da partida (FLAMENGO X GRÊMIO) só entram pelas
         // sugestões da partida, nunca pelo rótulo de um canal transmissor.
         if (isFixtureChannelName(b)) return false;
-        String compactA = compact(a);
-        String compactB = compact(b);
+        if (compact(a).equals(compact(b))) return true;
+        Variant variantA = splitVariant(a);
+        Variant variantB = splitVariant(b);
+        if (variantA.number != variantB.number) return false;
+        String baseA = variantA.base;
+        String baseB = variantB.base;
+        if (baseA.isEmpty() || baseB.isEmpty()) return false;
+        // Rótulos cujo nome muda de uma lista para outra (apelidos conhecidos).
+        Boolean alias = matchesAlias(baseA, baseB);
+        if (alias != null) return alias;
+        String compactA = compact(baseA);
         // Diferença só de espaçamento: "CAZETV" x "CAZE TV".
-        if (compactA.equals(compactB)) return true;
+        if (compactA.equals(compact(baseB))) return true;
         if (compactA.length() < 3) return false;
-        // Rótulo sem número x lista numerada: "CAZETV" x "CAZE TV 1",
-        // "PRIMEVIDEO" x "PRIME VIDEO 9" (e o inverso, lista sem número).
-        if (compactB.startsWith(compactA) && isNumeric(compactB.substring(compactA.length()))) return true;
-        if (compactA.startsWith(compactB) && isNumeric(compactA.substring(compactB.length()))) return true;
         // Sufixo tolerado na lista: todos os termos do rótulo precisam estar
         // no nome do canal ("PARAMOUNT" x "PARAMOUNT FUTEBOL", "MAX" x "HBO MAX").
-        for (String token : a.split(" ")) {
-            if (!(" " + b + " ").contains(" " + token + " ")) return false;
+        for (String token : baseA.split(" ")) {
+            if (!(" " + baseB + " ").contains(" " + token + " ")) return false;
         }
         return true;
+    }
+
+    /**
+     * Apelidos de canais que as listas nomeiam de formas diferentes do rótulo
+     * do app. Devolve null quando o rótulo não tem apelido (segue a regra
+     * genérica). O número da variante já foi comparado antes.
+     */
+    private static Boolean matchesAlias(String baseA, String baseB) {
+        String padded = " " + baseB + " ";
+        // "GE TV" x "GLOBO GE TV", "GLOBO GE TVL", "GLOBO GE FUTEBOL".
+        if (baseA.equals("GE TV") || baseA.equals("GE")) {
+            if (!padded.contains(" GE ")) return compact(baseA).equals(compact(baseB));
+            return padded.contains(" TV ") || padded.contains(" TVL ") || padded.contains(" FUTEBOL ")
+                    || baseB.equals("GE") || baseB.equals("GLOBO GE");
+        }
+        // "PRIME VIDEO" é só o da Amazon ("PRIME VIDEO AMAZON 3", "AMAZON PRIME VIDEO",
+        // "PRIME VIDEO 2"). Outros canais com "Prime" (PRIME BOX BRAZIL, PRIME VIDEO
+        // FILMES...) têm nomes com palavras a mais e ficam de fora.
+        if (baseA.equals("PRIME VIDEO") || baseA.equals("PRIME")) {
+            boolean prime = false, video = false, amazon = false, extra = false;
+            for (String token : baseB.split(" ")) {
+                switch (token) {
+                    case "PRIME": prime = true; break;
+                    case "VIDEO": case "VIDEOS": video = true; break;
+                    case "PRIMEVIDEO": prime = true; video = true; break;
+                    case "AMAZON": amazon = true; break;
+                    case "BR": case "BRASIL": case "BRAZIL": break;
+                    default: extra = true;
+                }
+            }
+            // Palavras a mais só são aceitas no "Prime Video Amazon" (ex.: "... AMAZON BR 1");
+            // sem "Amazon" qualquer palavra a mais indica outro canal (PRIME BOX, FILMES...).
+            if (extra && !(amazon && video)) return false;
+            return prime && (video || amazon);
+        }
+        return null;
+    }
+
+    /** Nome sem o número de variante, o número (1 quando não há) e se o número veio escrito. */
+    private static final class Variant {
+        final String base;
+        final int number;
+        final boolean explicit;
+        final boolean roman;
+        Variant(String base, int number, boolean explicit, boolean roman) { this.base = base; this.number = number; this.explicit = explicit; this.roman = roman; }
+    }
+
+    private static int romanValue(String token) {
+        switch (token) {
+            case "I": return 1; case "II": return 2; case "III": return 3; case "IV": return 4;
+            case "V": return 5; case "VI": return 6; case "VII": return 7; case "VIII": return 8;
+            case "IX": return 9;
+            default: return 0;
+        }
+    }
+
+    private static Variant splitVariant(String name) {
+        String[] tokens = name.split(" ");
+        int numberIndex = -1;
+        int number = 1;
+        boolean roman = false;
+        // Numeral romano no último termo ("CAZE TV V" = 5), nunca como nome inteiro.
+        if (tokens.length > 1 && romanValue(tokens[tokens.length - 1]) > 0) {
+            numberIndex = tokens.length - 1;
+            number = romanValue(tokens[numberIndex]);
+            roman = true;
+        } else {
+            for (int index = tokens.length - 1; index >= 0; index--) {
+                String token = tokens[index];
+                if (isNumeric(token) && token.length() <= 2) {
+                    numberIndex = index;
+                    number = Integer.parseInt(token);
+                    break;
+                }
+            }
+        }
+        // Número colado no nome ("SPORTV2", "CAZETV10"), só no último termo.
+        if (numberIndex < 0 && tokens.length > 0) {
+            String last = tokens[tokens.length - 1];
+            java.util.regex.Matcher glued = java.util.regex.Pattern.compile("^([A-Z]{3,})(\\d{1,2})$").matcher(last);
+            if (glued.matches()) {
+                tokens[tokens.length - 1] = glued.group(1);
+                return new Variant(String.join(" ", tokens).trim(), Integer.parseInt(glued.group(2)), true, false);
+            }
+        }
+        StringBuilder base = new StringBuilder();
+        for (int index = 0; index < tokens.length; index++) {
+            if (index == numberIndex) continue;
+            if (base.length() > 0) base.append(' ');
+            base.append(tokens[index]);
+        }
+        return new Variant(base.toString(), number, numberIndex >= 0, roman);
+    }
+
+    private static boolean isCaze(String value) {
+        return compact(splitVariant(value).base).equals("CAZETV");
+    }
+
+    private static boolean matchesCaze(String requested, String available, boolean lenient) {
+        Variant want = splitVariant(requested);
+        Variant have = splitVariant(available);
+        if (want.number != have.number) return false;
+        return lenient || have.roman;
     }
 
     private static String compact(String value) {
@@ -138,11 +267,15 @@ final class ChannelMatcher {
     }
 
     private static boolean matchesParamount(String requested, String available) {
-        String requestedVariant = requested.substring("PARAMOUNT".length()).trim();
-        String availableVariant = available.substring("PARAMOUNT".length()).trim();
-        if (requestedVariant.isEmpty()) return availableVariant.isEmpty() || availableVariant.matches("\\d+");
-        if (requestedVariant.matches("\\d+")) return requestedVariant.equals(availableVariant);
-        return requestedVariant.equals(availableVariant);
+        Variant want = splitVariant(requested);
+        Variant have = splitVariant(available);
+        if (want.number != have.number) return false;
+        String paddedHave = " " + have.base + " ";
+        if (paddedHave.contains(" CHANNEL ") || paddedHave.contains(" CANAL ")) return false;
+        for (String token : want.base.split(" ")) {
+            if (!paddedHave.contains(" " + token + " ")) return false;
+        }
+        return true;
     }
 
     private static boolean matchesGlobo(String requested, String available) {
