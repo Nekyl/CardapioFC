@@ -31,7 +31,7 @@ API_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 REQUEST_TIMEOUT = 15
 LIVE_REFRESH_INTERVAL_SECONDS = 45
 SQLITE_CACHE_TTL = 24 * 60 * 60
-CACHE_NAMESPACE = "v25"
+CACHE_NAMESPACE = "v26"
 SQLITE_CACHE_PATH = BASE_DIR / "games_cache.sqlite3"
 CHANNEL_SCRAPER_TTL = 4 * 60 * 60
 CHANNEL_SCRAPER_URLS = (
@@ -556,6 +556,12 @@ def map_status(raw: dict[str, Any]) -> tuple[str, str]:
         return "halftime", "Intervalo"
     if state == "in" or any(token in name for token in ("IN_PROGRESS", "FIRST_HALF", "SECOND_HALF")):
         return "live", "Ao vivo"
+    # A ESPN usa state="post" também para adiados e cancelados (completed=False),
+    # então o nome do status decide antes do estado.
+    if "POSTPONED" in name or description == "Postponed":
+        return "postponed", "Adiado"
+    if "CANCELED" in name or "CANCELLED" in name or description in {"Canceled", "Cancelled"}:
+        return "cancelled", "Cancelado"
     if state == "post" or raw.get("completed") or "FULL_TIME" in name or description == "Full Time":
         return "finished", "Terminou"
     if state == "pre" or "SCHEDULED" in name or description == "Scheduled":
@@ -637,6 +643,15 @@ def competitor(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def event_day_sao_paulo(iso: str) -> str | None:
+    """Retorna o dia (AAAA-MM-DD) do evento em São Paulo, ou None se inválido."""
+    try:
+        value = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(TZ)
+        return value.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_league(slug: str, payload: dict[str, Any], ymd: str, include_channels: bool = True) -> tuple[list[dict[str, Any]], str | None]:
     league = LEAGUE_BY_SLUG[slug]
     logo = league_logo(payload)
@@ -654,6 +669,12 @@ def parse_league(slug: str, payload: dict[str, Any], ymd: str, include_channels:
         status, status_label = map_status(status_type)
         period = status_period(status_type)
         iso = str(competition.get("date") or event.get("date") or "")
+        # Guarda contra vazamento entre dias: só entra no dia consultado se a data
+        # real do evento (em São Paulo) bater com o ymd pedido. Remarcações e
+        # inconsistências da ESPN não podem aparecer na lista de outro dia.
+        event_day = event_day_sao_paulo(iso) if iso else None
+        if event_day is not None and event_day != ymd:
+            continue
         kickoff = format_kickoff(iso)
         clock = status_clock_display(status_block, status_type)
         clock_seconds = numeric_clock_seconds(status_block)
