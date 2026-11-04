@@ -5,6 +5,7 @@ local.properties
 *.keystore
 signing.properties
 *.apk
+dist/
 *.aab
 *.sqlite3
 .idea/

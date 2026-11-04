@@ -130,10 +130,10 @@ Compile a release:
 ./gradlew :app:assembleRelease
 ```
 
-O APK será gerado em:
+O APK é gerado com o nome da variante e da versão atual e copiado para `dist/` na raiz do projeto:
 
 ```text
-app/build/outputs/apk/release/app-release.apk
+dist/CardapioFC-4.1-arm64.apk
 ```
 
 Por padrão, o build gera o APK compacto somente para `arm64-v8a`. Para gerar o APK universal, incluindo também `x86_64`, use:
@@ -141,6 +141,8 @@ Por padrão, o build gera o APK compacto somente para `arm64-v8a`. Para gerar o 
 ```bash
 ./gradlew :app:assembleRelease -Puniversal
 ```
+
+O universal é salvo como `dist/CardapioFC-4.1-universal.apk`. Os dois APKs coexistem em `dist/`, então dá para compilar um logo após o outro sem mover nem sobrescrever arquivos (a pasta `app/build/outputs/` é limpa pelo AGP a cada build). O nome usa a `versionName` do `app/build.gradle`, portanto muda automaticamente quando a versão do aplicativo é atualizada.
 
 O código da aplicação é o mesmo nas duas variantes; somente as bibliotecas nativas Python incluídas no APK mudam. A variante universal é maior, mas também atende emuladores e dispositivos x86_64.
 
@@ -182,6 +184,7 @@ app/
 build.gradle                        Plugins e configuração raiz
 settings.gradle                     Módulos e repositórios Gradle
 signing.properties.example          Modelo de assinatura local
+dist/                               APKs compilados por variante (gerada, não versionada)
 ```
 
 ## Fontes de dados

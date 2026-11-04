@@ -5,6 +5,14 @@ plugins {
 
 def universalApk = project.hasProperty('universal')
 
+// Assinatura local de release: copie signing.properties.example para
+// signing.properties (arquivo no .gitignore) e preencha com os dados da keystore.
+def signingProps = new Properties()
+def signingPropsFile = rootProject.file('signing.properties')
+if (signingPropsFile.exists()) {
+    signingPropsFile.withInputStream { signingProps.load(it) }
+}
+
 android {
     namespace 'br.com.cardapiofc'
     compileSdk 35
@@ -24,19 +32,40 @@ android {
 
     signingConfigs {
         release {
-            storeFile rootProject.file('cardapio-zero.jks')
-            storePassword 'cardapiofc-zero'
-            keyAlias 'cardapiofc-zero'
-            keyPassword 'cardapiofc-zero'
+            storeFile rootProject.file(signingProps.getProperty('storeFile', 'cardapio-zero.jks'))
+            storePassword signingProps.getProperty('storePassword', '')
+            keyAlias signingProps.getProperty('keyAlias', 'cardapiofc-zero')
+            keyPassword signingProps.getProperty('keyPassword', '')
         }
     }
 
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            // Sem signing.properties, a release é gerada sem assinatura.
+            if (signingPropsFile.exists()) signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // Release: nome final por variante para builds não se sobrescreverem.
+    // O AGP apaga a saída anterior a cada build, então o APK também é copiado
+    // para dist/ na raiz do projeto após o assemble.
+    applicationVariants.all { variant ->
+        if (variant.buildType.name != 'release') return
+        variant.outputs.all { output ->
+            outputFileName = "CardapioFC-${variant.versionName}-${universalApk ? 'universal' : 'arm64'}.apk"
+        }
+        variant.assembleProvider.configure {
+            doLast {
+                def distDir = rootProject.file('dist')
+                distDir.mkdirs()
+                project.copy {
+                    from variant.outputs.first().outputFile
+                    into distDir
+                }
+            }
         }
     }
 
@@ -62,7 +91,7 @@ dependencies {
 chaquopy {
     defaultConfig {
         version = '3.12'
-        buildPython '/usr/bin/python3.12'
+        buildPython project.findProperty('chaquoPython') ?: '/usr/bin/python3.12'
         pip {
             install 'fastapi==0.115.6'
             install 'requests==2.32.3'
