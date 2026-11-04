@@ -21,7 +21,6 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
-import java.text.Normalizer;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.ArrayList;
@@ -53,7 +52,6 @@ public final class IptvManager {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final SharedPreferences prefs;
     private volatile State state = State.empty();
-    private volatile Map<String, List<Channel>> channelIndex = Collections.emptyMap();
     private volatile List<Channel> fixtureChannels = Collections.emptyList();
     private final LinkedHashMap<String, String> searchResultCache = new LinkedHashMap<>(32, 0.75f, true);
 
@@ -185,26 +183,10 @@ public final class IptvManager {
     }
 
     public static boolean matches(String displayName, String playlistName) {
-        return matchesNormalized(normalizeChannelName(displayName), normalizeChannelName(playlistName));
+        return ChannelMatcher.matches(displayName, playlistName);
     }
 
-    private static boolean matchesNormalized(String a, String b) {
-        if (a.isEmpty() || b.isEmpty()) return false;
-        if (isNamedChannel(a, "PREMIERE") && isNamedChannel(b, "PREMIERE")) return matchesPremiere(a, b);
-        if (isNamedChannel(a, "PARAMOUNT") && isNamedChannel(b, "PARAMOUNT")) return matchesParamount(a, b);
-        if (isNamedChannel(a, "GLOBO") && isNamedChannel(b, "GLOBO")) return matchesGlobo(a, b);
-        return a.equals(b);
-    }
-
-    private static boolean isNamedChannel(String value, String name) { return value.equals(name) || value.startsWith(name + " "); }
-
-    private static String stripBroadcastPrefix(String value) {
-        if (value.startsWith("REDE ")) return value.substring("REDE ".length()).trim();
-        if (value.startsWith("TV ")) return value.substring("TV ".length()).trim();
-        return value;
-    }
-
-    private static String normalizeChannelName(String value) { return stripBroadcastPrefix(canonical(value)); }
+    private static String normalizeChannelName(String value) { return ChannelMatcher.normalizeChannelName(value); }
 
     public synchronized String findStreamJson(String channelName) {
         JSONArray matches = findStreams(normalizeChannelName(channelName));
@@ -220,17 +202,17 @@ public final class IptvManager {
     }
 
     public synchronized String findSuggestedStreamsJson(String homeName, String awayName) {
-        String home = normalizeTeamName(homeName), away = normalizeTeamName(awayName);
+        String home = ChannelMatcher.normalizeTeamName(homeName), away = ChannelMatcher.normalizeTeamName(awayName);
         if (home.isEmpty() && away.isEmpty()) return "[]";
         String key = "FIXTURE:" + home + "|" + away;
         String cached = searchResultCache.get(key);
         if (cached != null) return cached;
         Map<String, Channel> found = new LinkedHashMap<>();
         for (Channel channel : fixtureChannels) {
-            if (fixtureScore(channel.searchName, home, away) > 0 && !found.containsKey(channel.url)) found.put(channel.url, channel);
+            if (ChannelMatcher.fixtureScore(channel.searchName, home, away) > 0 && !found.containsKey(channel.url)) found.put(channel.url, channel);
         }
         List<Channel> ordered = new ArrayList<>(found.values());
-        ordered.sort(Comparator.<Channel>comparingInt(channel -> fixtureScore(channel.searchName, home, away)).reversed()
+        ordered.sort(Comparator.<Channel>comparingInt(channel -> ChannelMatcher.fixtureScore(channel.searchName, home, away)).reversed()
                 .thenComparing(channel -> channel.name.toLowerCase(Locale.ROOT)));
         JSONArray result = new JSONArray();
         for (Channel channel : ordered) {
@@ -244,19 +226,11 @@ public final class IptvManager {
     private JSONArray findStreams(String query) {
         JSONArray result = new JSONArray();
         if (query.isEmpty()) return result;
-        Map<String, List<Channel>> index = channelIndex;
-        List<Channel> candidates = new ArrayList<>();
-        boolean familySearch = isNamedChannel(query, "PREMIERE") || isNamedChannel(query, "PARAMOUNT") || isNamedChannel(query, "GLOBO");
-        if (familySearch) {
-            for (Map.Entry<String, List<Channel>> entry : index.entrySet()) {
-                if (matchesNormalized(query, entry.getKey())) candidates.addAll(entry.getValue());
-            }
-        } else {
-            List<Channel> exact = index.get(query);
-            if (exact != null) candidates.addAll(exact);
-        }
-        for (Channel channel : candidates) {
-            if (matchesNormalized(query, channel.searchName)) result.put(channel.toJson());
+        // Varre a lista inteira: o rótulo do app ("CazéTV", "Prime Video") pode
+        // corresponder a vários subcanais numerados da playlist (CAZÉ TV 1..10,
+        // PRIME VIDEO 1..9) e a listas com espaçamento/sufixos diferentes.
+        for (Channel channel : state.channels) {
+            if (ChannelMatcher.matchesNormalized(query, channel.searchName)) result.put(channel.toJson());
         }
         return result;
     }
@@ -269,128 +243,18 @@ public final class IptvManager {
 
     private synchronized void clearSearchData() {
         searchResultCache.clear();
-        channelIndex = Collections.emptyMap();
         fixtureChannels = Collections.emptyList();
     }
 
     private synchronized void rebuildSearchIndex() {
-        Map<String, List<Channel>> index = new LinkedHashMap<>();
         List<Channel> fixtures = new ArrayList<>();
         for (Channel channel : state.channels) {
-            index.computeIfAbsent(channel.searchName, ignored -> new ArrayList<>()).add(channel);
-            if (isFixtureChannelName(channel.searchName)) fixtures.add(channel);
+            if (ChannelMatcher.isFixtureChannelName(channel.searchName)) fixtures.add(channel);
         }
-        for (Map.Entry<String, List<Channel>> entry : index.entrySet()) entry.setValue(Collections.unmodifiableList(entry.getValue()));
-        channelIndex = Collections.unmodifiableMap(index);
         fixtureChannels = Collections.unmodifiableList(fixtures);
         searchResultCache.clear();
     }
 
-    private static boolean isFixtureChannelName(String name) {
-        String padded = " " + name + " ";
-        return hasToken(padded, "X") || hasToken(padded, "VS") || hasToken(padded, "VERSUS");
-    }
-
-    private static String normalizeTeamName(String value) {
-        String normalized = normalizeChannelName(value);
-        return normalized.length() < 3 ? "" : normalized;
-    }
-
-    private static int fixtureScore(String channelName, String home, String away) {
-        if (!isFixtureChannelName(channelName)) return 0;
-        boolean homeMatch = matchesTeamPhrase(channelName, home);
-        boolean awayMatch = matchesTeamPhrase(channelName, away);
-        return (homeMatch ? 1 : 0) + (awayMatch ? 1 : 0);
-    }
-
-    private static boolean matchesTeamPhrase(String channelName, String team) {
-        if (team.isEmpty()) return false;
-        String paddedName = " " + channelName + " ";
-        if (paddedName.contains(" " + team + " ")) return true;
-        for (String word : team.split(" ")) {
-            if (word.length() >= 5 && paddedName.contains(" " + word + " ")) return true;
-        }
-        return false;
-    }
-
-    private static String canonical(String value) {
-        String normalized = Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", "").toUpperCase(Locale.ROOT)
-                .replaceAll("[^A-Z0-9]+", " ").trim().replaceAll("\\s+", " ");
-        return normalized.replaceAll("\\b(FULL HD|FHD|ULTRA HD|UHD|4K|8K|HD|SD|1080P|720P|H264|H265|HEVC)\\b", " ")
-                .trim().replaceAll("\\s+", " ");
-    }
-
-    private static boolean matchesPremiere(String requested, String available) {
-        String requestedVariant = requested.substring("PREMIERE".length()).trim();
-        String availableVariant = available.substring("PREMIERE".length()).trim();
-        if (isPremiereFc(requestedVariant)) {
-            return isPremiereFc(availableVariant) || "1".equals(availableVariant)
-                    || "CLUBE".equals(availableVariant) || "CLUBES".equals(availableVariant);
-        }
-        if (requestedVariant.isEmpty()) return availableVariant.isEmpty() || "1".equals(availableVariant);
-        if (requestedVariant.matches("\\d+")) return requestedVariant.equals(availableVariant);
-        if ("CLUBE".equals(requestedVariant) || "CLUBES".equals(requestedVariant)) {
-            return "CLUBE".equals(availableVariant) || "CLUBES".equals(availableVariant);
-        }
-        return requestedVariant.equals(availableVariant);
-    }
-
-    private static boolean isPremiereFc(String variant) {
-        return "FC".equals(variant) || "F C".equals(variant)
-                || "FUTEBOL CLUBE".equals(variant) || "FOOTBALL CLUB".equals(variant);
-    }
-
-    private static boolean matchesParamount(String requested, String available) {
-        String requestedVariant = requested.substring("PARAMOUNT".length()).trim();
-        String availableVariant = available.substring("PARAMOUNT".length()).trim();
-        if (requestedVariant.isEmpty()) return availableVariant.isEmpty() || availableVariant.matches("\\d+");
-        if (requestedVariant.matches("\\d+")) return requestedVariant.equals(availableVariant);
-        return requestedVariant.equals(availableVariant);
-    }
-
-    private static boolean matchesGlobo(String requested, String available) {
-        String requestedRegion = globoRegion(requested);
-        String availableRegion = globoRegion(available);
-        if (requestedRegion != null) return requestedRegion.equals(availableRegion);
-        return "SP".equals(availableRegion) || "MG".equals(availableRegion) || "RJ".equals(availableRegion);
-    }
-
-    private static String globoRegion(String value) {
-        String padded = " " + value + " ";
-        if (hasToken(padded, "SP") || value.contains("SAO PAULO")) return "SP";
-        if (hasToken(padded, "MG") || hasToken(padded, "MINAS") || value.contains("MINAS GERAIS")
-                || hasToken(padded, "BH") || value.contains("BELO HORIZONTE")) return "MG";
-        if (hasToken(padded, "RJ") || value.contains("RIO DE JANEIRO")) return "RJ";
-        if (hasToken(padded, "DF") || value.contains("DISTRITO FEDERAL") || hasToken(padded, "BRASILIA")) return "DF";
-        if (hasToken(padded, "RS") || value.contains("RIO GRANDE DO SUL")) return "RS";
-        if (hasToken(padded, "PR") || value.contains("PARANA")) return "PR";
-        if (hasToken(padded, "SC") || value.contains("SANTA CATARINA")) return "SC";
-        if (hasToken(padded, "BA") || hasToken(padded, "BAHIA")) return "BA";
-        if (hasToken(padded, "PE") || value.contains("PERNAMBUCO")) return "PE";
-        if (hasToken(padded, "CE") || hasToken(padded, "CEARA")) return "CE";
-        if (hasToken(padded, "GO") || hasToken(padded, "GOIAS")) return "GO";
-        if (hasToken(padded, "ES") || value.contains("ESPIRITO SANTO")) return "ES";
-        if (hasToken(padded, "AM") || value.contains("AMAZONAS")) return "AM";
-        if (hasToken(padded, "PA") || hasToken(padded, "PARA")) return "PA";
-        if (hasToken(padded, "MA") || value.contains("MARANHAO")) return "MA";
-        if (hasToken(padded, "MS") || value.contains("MATO GROSSO DO SUL")) return "MS";
-        if (hasToken(padded, "MT") || value.contains("MATO GROSSO")) return "MT";
-        if (hasToken(padded, "RN") || value.contains("RIO GRANDE DO NORTE")) return "RN";
-        if (hasToken(padded, "PB") || value.contains("PARAIBA")) return "PB";
-        if (hasToken(padded, "AL") || value.contains("ALAGOAS")) return "AL";
-        if (hasToken(padded, "SE") || value.contains("SERGIPE")) return "SE";
-        if (hasToken(padded, "PI") || value.contains("PIAUI")) return "PI";
-        if (hasToken(padded, "TO") || value.contains("TOCANTINS")) return "TO";
-        if (hasToken(padded, "RO") || value.contains("RONDONIA")) return "RO";
-        if (hasToken(padded, "AC") || value.contains("ACRE")) return "AC";
-        if (hasToken(padded, "AP") || value.contains("AMAPA")) return "AP";
-        if (hasToken(padded, "RR") || value.contains("RORAIMA")) return "RR";
-        if (hasToken(padded, "NE") || value.contains("NORDESTE")) return "NE";
-        return null;
-    }
-
-    private static boolean hasToken(String padded, String token) { return padded.contains(" " + token + " "); }
     private static String normalizeServer(String server) {
         String value = server == null ? "" : server.trim();
         while (value.endsWith("/")) value = value.substring(0, value.length() - 1);

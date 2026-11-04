@@ -277,8 +277,10 @@ class FallbackScraper:
     def __init__(self) -> None:
         self._cache: dict[str, list[str]] = {}
         self._detail_urls: dict[str, str] = {}
+        self._key_source: dict[str, str] = {}
         self._last_update = 0.0
         self._last_attempt = 0.0
+        self._last_miss_retry = 0.0
         self._refreshing = False
         self._condition = threading.Condition()
 
@@ -433,8 +435,9 @@ class FallbackScraper:
             self._refreshing = True
             self._last_attempt = now
 
-        new_cache: dict[str, list[str]] = {}
-        new_detail_urls: dict[str, str] = {}
+        new_cache: dict[str, tuple[str, list[str]]] = {}
+        new_detail_urls: dict[str, tuple[str, str]] = {}
+        loaded_sources: set[str] = set()
         headers = {
             **REQUEST_HEADERS,
             "Accept": "text/html,application/xhtml+xml",
@@ -446,25 +449,43 @@ class FallbackScraper:
                     response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
                     if not response.ok:
                         continue
+                    parsed = 0
                     structured = self._structured_matches(response.text)
                     if structured:
                         for matchup, channels, detail_url in structured:
                             key = normalize_name(matchup)
-                            new_cache[key] = channels
+                            new_cache[key] = (url, channels)
                             if detail_url:
-                                new_detail_urls[key] = detail_url
+                                new_detail_urls[key] = (url, detail_url)
+                            parsed += 1
                     else:
                         for text in self._text_candidates(response.text):
                             channels = self._channels_from_text(text)
                             if channels:
-                                new_cache[normalize_name(text)] = channels
+                                new_cache[normalize_name(text)] = (url, channels)
+                                parsed += 1
+                    if parsed:
+                        loaded_sources.add(url)
                 except requests.RequestException as error:
                     print(f"[Scraper] Erro ao buscar {url}: {error}")
-            if new_cache:
-                with self._condition:
-                    self._cache = new_cache
-                    self._detail_urls = new_detail_urls
-                    self._last_update = time.time()
+            with self._condition:
+                if new_cache:
+                    # Substitui apenas as fontes que responderam com jogos: uma das
+                    # páginas fora do ar não pode apagar o dia que a outra trouxe.
+                    replaced = {source for source, _ in new_cache.values()}
+                    for key in [key for key, source in self._key_source.items() if source in replaced]:
+                        self._cache.pop(key, None)
+                        self._detail_urls.pop(key, None)
+                        self._key_source.pop(key, None)
+                    for key, (source, channels) in new_cache.items():
+                        self._cache[key] = channels
+                        self._key_source[key] = source
+                    for key, (source, detail_url) in new_detail_urls.items():
+                        self._detail_urls[key] = detail_url
+                    # A grade só fica "fresca" quando as duas páginas carregam;
+                    # assim uma falha parcial mantém as tentativas chegando.
+                    if len(loaded_sources) == len(CHANNEL_SCRAPER_URLS):
+                        self._last_update = time.time()
         finally:
             with self._condition:
                 self._refreshing = False
@@ -502,6 +523,16 @@ class FallbackScraper:
         if not has_cache:
             self._fetch_schedule(force=True)
             best_channels, highest_score, best_key, _ = lookup()
+        # Jogo ausente da grade: pode ter sido uma falha parcial na busca das
+        # páginas. Tenta de novo com intervalo mínimo para não martelar o site.
+        if highest_score < 2:
+            with self._condition:
+                retry_due = time.time() - self._last_miss_retry >= 120
+                if retry_due:
+                    self._last_miss_retry = time.time()
+            if retry_due:
+                self._fetch_schedule(force=True)
+                best_channels, highest_score, best_key, _ = lookup()
         if not best_channels and highest_score == 2:
             with self._condition:
                 detail_url = self._detail_urls.get(best_key)
@@ -530,6 +561,32 @@ def channels_for_match(slug: str, home: str, away: str, match_date: str, broadca
     # usada para placar/status, mas não serve como fallback de transmissão.
     scraped_channels = fallback_scraper.get_channels(home, away)
     return scraped_channels
+
+
+def repair_missing_channels(payload: dict[str, Any]) -> bool:
+    """Reconsulta os canais de partidas que ficaram sem nenhuma opção.
+
+    O cache de um dia pode ter sido congelado quando a grade do Futebol na TV
+    chegou incompleta (uma das páginas fora do ar). Repara somente o que falta,
+    sem refazer a consulta do dia, e apenas nas datas que a grade cobre.
+    """
+    changed = False
+    for match in payload.get("matches") or []:
+        if match.get("channels"):
+            continue
+        ymd = str(match.get("date") or "")
+        if not is_channel_lookup_date(ymd):
+            continue
+        channels = channels_for_match(
+            str(match.get("leagueSlug") or ""),
+            str((match.get("home") or {}).get("name") or ""),
+            str((match.get("away") or {}).get("name") or ""),
+            ymd,
+        )
+        if channels:
+            match["channels"] = channels
+            changed = True
+    return changed
 
 
 def image_url(value: Any) -> str | None:
@@ -884,10 +941,14 @@ def load_day(ymd: str) -> dict[str, Any]:
     memory_key = f"{CACHE_NAMESPACE}:all:{ymd}"
     cached = cache.get(memory_key)
     if cached is not None and not payload_needs_live_refresh(cached):
+        if repair_missing_channels(cached):
+            sqlite_cache_set(f"all:{ymd}", cached)
         return cached
     sqlite_cached = sqlite_cache_get(f"all:{ymd}")
     if sqlite_cached is not None and not payload_needs_live_refresh(sqlite_cached):
         cache.set(memory_key, sqlite_cached)
+        if repair_missing_channels(sqlite_cached):
+            sqlite_cache_set(f"all:{ymd}", sqlite_cached)
         return sqlite_cached
 
     matches: list[dict[str, Any]] = []
@@ -971,10 +1032,14 @@ def load_league_day(ymd: str, slug: str) -> dict[str, Any]:
     cache_key = f"{ymd}:{slug}"
     cached = cache.get(cache_key)
     if cached is not None and not payload_needs_live_refresh(cached):
+        if repair_missing_channels(cached):
+            sqlite_cache_set(f"league:{slug}:{ymd}", cached)
         return cached
     sqlite_cached = sqlite_cache_get(f"league:{slug}:{ymd}")
     if sqlite_cached is not None and not payload_needs_live_refresh(sqlite_cached):
         cache.set(cache_key, sqlite_cached)
+        if repair_missing_channels(sqlite_cached):
+            sqlite_cache_set(f"league:{slug}:{ymd}", sqlite_cached)
         return sqlite_cached
 
     league = LEAGUE_BY_SLUG[slug]

@@ -294,7 +294,7 @@
   }
 
   const FRONTEND_CACHE_TTL = 30 * 60 * 1000;
-  const FRONTEND_CACHE_VERSION = "v24";
+  const FRONTEND_CACHE_VERSION = "v25";
   const LIVE_POLL_INTERVAL_MS = 45_000;
   let liveStream = null;
   let liveStreamGeneration = 0;
