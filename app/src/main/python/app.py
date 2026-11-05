@@ -29,7 +29,7 @@ BASE_DIR = Path(__file__).resolve().parent
 TZ = timezone(timedelta(hours=-3))
 API_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 REQUEST_TIMEOUT = 15
-LIVE_REFRESH_INTERVAL_SECONDS = 45
+LIVE_REFRESH_INTERVAL_SECONDS = 5
 SQLITE_CACHE_TTL = 24 * 60 * 60
 CACHE_NAMESPACE = "v26"
 SQLITE_CACHE_PATH = BASE_DIR / "games_cache.sqlite3"
@@ -282,10 +282,28 @@ def channel_identity(value: str) -> str:
 
 NON_CHANNEL_SERVICE_IDENTITIES = {"youtube", "youtube tv", "ppv", "ppv onefootball"}
 
+# Termos inequívocos de conteúdo adulto. "max" não entra aqui: é um canal
+# esportivo legítimo e não deve ser confundido com uma regra genérica de filtro.
+INAPPROPRIATE_CHANNEL_TERMS = {
+    "adult", "adults", "adulto", "adultos", "xxx", "porn", "porno", "pornografia",
+    "sex", "sexo", "sexy", "erotic", "erotico", "erotica", "hentai", "playboy",
+    "onlyfans", "brazzers", "redtube", "nude", "nudity", "fetish", "private",
+}
+
 
 def is_non_channel_service(value: str) -> bool:
     identity = channel_identity(value)
     return identity in NON_CHANNEL_SERVICE_IDENTITIES or identity.startswith("ppv ") or " onefootball" in identity
+
+
+def is_inappropriate_channel(value: str) -> bool:
+    """Impede que nomes adultos/XXX sejam exibidos ou usados no IPTV."""
+    identity = channel_identity(value)
+    return any(term in identity.split() for term in INAPPROPRIATE_CHANNEL_TERMS)
+
+
+def is_allowed_channel(value: str) -> bool:
+    return bool(value) and not is_non_channel_service(value) and not is_inappropriate_channel(value)
 
 
 class FallbackScraper:
@@ -360,9 +378,10 @@ class FallbackScraper:
                 if not candidate or not re.fullmatch(r"[A-ZÀ-Ý0-9][A-ZÀ-Ý0-9+ -]*", candidate):
                     continue
                 value = normalize_channel_label(candidate)
-                if value and not is_non_channel_service(value) and value not in channels:
+                if is_allowed_channel(value) and value not in channels:
                     channels.append(value)
 
+        channels = [channel for channel in channels if is_allowed_channel(channel)]
         specific_channels = [channel for channel in channels if not is_non_channel_service(channel)]
         if specific_channels:
             channels = specific_channels
@@ -392,7 +411,7 @@ class FallbackScraper:
                 if channels_match:
                     for raw in re.findall(r"<b\b[^>]*>(.*?)</b>", channels_match.group(1), flags=re.IGNORECASE | re.DOTALL):
                         value = normalize_channel_label(plain(raw))
-                        if value and not is_non_channel_service(value) and value not in channels:
+                        if is_allowed_channel(value) and value not in channels:
                             channels.append(value)
                 link_match = re.search(r"<a\b[^>]*class=[\"'][^\"']*\bm-link\b[^\"']*[\"'][^>]*href=[\"']([^\"']+)", article, flags=re.IGNORECASE | re.DOTALL)
                 result.append((f"{teams[0]} x {teams[1]}", channels, link_match.group(1) if link_match else None))
@@ -415,7 +434,7 @@ class FallbackScraper:
             for node in channel_nodes:
                 raw = " ".join(str(item).strip() for item in node.xpath('.//b//text()') if str(item).strip())
                 value = normalize_channel_label(raw)
-                if value and not is_non_channel_service(value) and value not in channels:
+                if is_allowed_channel(value) and value not in channels:
                     channels.append(value)
             hrefs = article.xpath('.//a[contains(@class, "m-link")]/@href')
             detail_url = str(hrefs[0]) if hrefs else None
@@ -668,15 +687,42 @@ def status_clock_display(status_block: dict[str, Any], status_type: dict[str, An
     return added or next((value for value in normalized if value), None)
 
 
-def numeric_clock_seconds(status_block: dict[str, Any]) -> float | None:
-    value = status_block.get("clock")
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        parsed = float(str(value).strip())
-        return parsed if parsed >= 0 else None
-    except (TypeError, ValueError):
+def numeric_clock_seconds(status_block: dict[str, Any], status_type: dict[str, Any] | None = None) -> float | None:
+    """Normaliza o relógio da ESPN, sem deixar clock=0 esconder o displayClock."""
+    status_type = status_type or {}
+    raw_values = [
+        status_block.get("clock"),
+        status_block.get("displayClock"),
+        status_type.get("shortDetail"),
+        status_type.get("detail"),
+    ]
+
+    def parse(value: Any) -> float | None:
+        if isinstance(value, (int, float)):
+            return float(value) if value >= 0 else None
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = float(text)
+            return parsed if parsed >= 0 else None
+        except (TypeError, ValueError):
+            pass
+        iso = re.fullmatch(r"PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?", text, re.IGNORECASE)
+        if iso and any(iso.groups()):
+            return float(iso.group(1) or 0) * 3600 + float(iso.group(2) or 0) * 60 + float(iso.group(3) or 0)
+        minute_second = re.search(r"(?:Ao vivo\s+)?(\d{1,3})(?::(\d{1,2}))?\s*(?:['’′]|min(?:utos?)?)?", text, re.IGNORECASE)
+        if minute_second:
+            return int(minute_second.group(1)) * 60 + int(minute_second.group(2) or 0)
         return None
+
+    parsed = [parse(value) for value in raw_values]
+    primary = parsed[0]
+    textual = [value for value in parsed[1:] if value is not None]
+    # A ESPN frequentemente mantém clock=0, mas já atualiza displayClock.
+    if primary == 0 and any(value > 0 for value in textual):
+        return max(textual)
+    return primary if primary is not None else (max(textual) if textual else None)
 
 
 def status_period(raw: dict[str, Any]) -> int | None:
@@ -742,16 +788,26 @@ def parse_league(slug: str, payload: dict[str, Any], ymd: str, include_channels:
         status_type = status_block.get("type") or {}
         status, status_label = map_status(status_type)
         period = status_period(status_type)
-        iso = str(competition.get("date") or event.get("date") or "")
-        # Guarda contra vazamento entre dias: só entra no dia consultado se a data
-        # real do evento (em São Paulo) bater com o ymd pedido. Remarcações e
-        # inconsistências da ESPN não podem aparecer na lista de outro dia.
-        event_day = event_day_sao_paulo(iso) if iso else None
-        if event_day is not None and event_day != ymd:
+        event_iso = str(event.get("date") or "")
+        competition_iso = str(competition.get("date") or "")
+        iso = competition_iso or event_iso
+        event_day = event_day_sao_paulo(event_iso) if event_iso else None
+        competition_day = event_day_sao_paulo(competition_iso) if competition_iso else None
+        postponed_target_date = None
+        postponed_original_date = None
+        if status == "postponed" and event_day and competition_day and event_day != competition_day:
+            postponed_original_date = event_day
+            postponed_target_date = competition_day
+        # Uma partida normal pertence a um único dia. Para adiamentos, a ESPN
+        # pode manter a data original no evento e a nova data na competição;
+        # nesse caso, preservamos o card nos dois dias e informamos o destino.
+        valid_days = {day for day in (event_day, competition_day) if day}
+        if valid_days and ymd not in valid_days:
             continue
         kickoff = format_kickoff(iso)
         clock = status_clock_display(status_block, status_type)
-        clock_seconds = numeric_clock_seconds(status_block)
+        clock_seconds = numeric_clock_seconds(status_block, status_type)
+        clock_synced_at = int(time.time() * 1000) if status in {"live", "halftime"} else None
         if status == "live" and clock:
             status_label = f"Ao vivo {clock}"
         elif status == "scheduled":
@@ -771,6 +827,9 @@ def parse_league(slug: str, payload: dict[str, Any], ymd: str, include_channels:
             "clock": clock,
             "clockDisplay": clock if status == "live" and "+" in str(clock or "") else None,
             "clockSeconds": clock_seconds,
+            "clockSyncedAt": clock_synced_at,
+            "postponedOriginalDate": postponed_original_date,
+            "postponedTargetDate": postponed_target_date,
             "period": period,
             "home": home,
             "away": away,
@@ -896,7 +955,8 @@ def fetch_event_summary(slug: str, match: dict[str, Any]) -> dict[str, Any] | No
         status, status_label = map_status(status_type)
         period = status_period(status_type)
         clock = status_clock_display(status_block, status_type)
-        clock_seconds = numeric_clock_seconds(status_block)
+        clock_seconds = numeric_clock_seconds(status_block, status_type)
+        clock_synced_at = int(time.time() * 1000) if status in {"live", "halftime"} else None
         if status == "live" and clock:
             status_label = f"Ao vivo {clock}"
         elif status == "scheduled":
@@ -923,6 +983,7 @@ def fetch_event_summary(slug: str, match: dict[str, Any]) -> dict[str, Any] | No
             "clock": clock,
             "clockDisplay": clock if status == "live" and "+" in str(clock or "") else None,
             "clockSeconds": clock_seconds if status == "live" else None,
+            "clockSyncedAt": clock_synced_at,
             "period": period,
             "home": home,
             "away": away,
@@ -1025,7 +1086,8 @@ def live_games_stream(ymd: str, slug: str | None = None):
                 "score": match.get("score"),
                 "status": match.get("status"),
                 "statusLabel": match.get("statusLabel") if match.get("status") != "live" else None,
-                "clockSeconds": match.get("clockSeconds") if match.get("status") == "live" else None,
+                "clockSeconds": match.get("clockSeconds") if match.get("status") in {"live", "halftime"} else None,
+                "clockSyncedAt": match.get("clockSyncedAt"),
                 "clockDisplay": match.get("clock") if match.get("status") == "live" and "+" in str(match.get("clock") or "") else None,
                 "period": match.get("period"),
                 "match": match if match.get("status") in {"live", "halftime"} else None,

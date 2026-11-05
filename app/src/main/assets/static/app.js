@@ -73,7 +73,14 @@
     else if (status.status === "error") refs.iptvStatusLine.textContent = status.error || "Não foi possível carregar a lista.";
     else if (status.status === "connected") {
       const connections = status.active >= 0 && status.max >= 0 ? ` · Conexões: ${status.active}/${status.max}` : "";
-      const expiry = status.expiry ? ` · Validade: ${status.expiry}` : "";
+      const expiryValue = String(status.expiry ?? "").trim();
+      const hasExpiry =
+        expiryValue &&
+        expiryValue.toLowerCase() !== "null" &&
+        expiryValue.toLowerCase() !== "undefined";
+
+      const expiry = ` · Validade: ${hasExpiry ? expiryValue : "Ilimitado"}`;
+
       refs.iptvStatusLine.textContent = `${count} canais${connections}${expiry}`;
     } else refs.iptvStatusLine.textContent = "Nenhuma lista conectada.";
     const connected = status.status === "connected";
@@ -295,7 +302,7 @@
 
   const FRONTEND_CACHE_TTL = 30 * 60 * 1000;
   const FRONTEND_CACHE_VERSION = "v25";
-  const LIVE_POLL_INTERVAL_MS = 45_000;
+  const LIVE_POLL_INTERVAL_MS = 5_000;
   let liveStream = null;
   let liveStreamGeneration = 0;
   let liveWatchdogTimer = null;
@@ -490,11 +497,35 @@
     return `<svg class="live-indicator" viewBox="0 0 16 16" aria-hidden="true"><circle class="live-indicator-dot" cx="8" cy="8" r="3"></circle><circle class="live-indicator-ring" cx="8" cy="8" r="6"></circle></svg>`;
   }
 
+  function officialClockSeconds(match) {
+    const numeric = Number(match?.clockSeconds);
+    const candidates = [match?.clockDisplay, match?.clock, match?.statusLabel];
+    let textual = NaN;
+    for (const candidate of candidates) {
+      const text = String(candidate || "").trim();
+      const iso = text.match(/^PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?$/i);
+      if (iso && iso.slice(1).some(Boolean)) {
+        textual = Number(iso[1] || 0) * 3600 + Number(iso[2] || 0) * 60 + Number(iso[3] || 0);
+        break;
+      }
+      const minuteSecond = text.match(/(?:Ao vivo\s+)?(\d{1,3})(?::(\d{1,2}))?\s*['’′]?/i);
+      if (minuteSecond) {
+        textual = Number(minuteSecond[1]) * 60 + Number(minuteSecond[2] || 0);
+        break;
+      }
+    }
+    if (Number.isFinite(numeric) && numeric === 0 && Number.isFinite(textual) && textual > 0) return textual;
+    if (Number.isFinite(numeric) && numeric >= 0) return numeric;
+    return textual;
+  }
+
   function localLiveLabel(match) {
     if (match?.status !== "live") return null;
     const now = Date.now();
     const additionMatch = typeof match.clockDisplay === "string" ? match.clockDisplay.match(/^(\d+)\+(\d+)'$/) : null;
-    const officialSeconds = Number(match.clockSeconds);
+    const officialSeconds = officialClockSeconds(match);
+    const apiSyncedAt = Number(match.clockSyncedAt);
+    const apiSyncAnchor = Number.isFinite(apiSyncedAt) ? apiSyncedAt : 0;
 
     // Quando a API já informa o acréscimo, ele é a âncora do relógio.
     // Assim, `45+3` começa em 45+3 e avança para 45+4, 45+5 etc.
@@ -506,11 +537,13 @@
       if (
         match._liveClockBaseSeconds !== additionBaseSeconds
         || match._liveClockPeriod !== period
+        || match._liveClockSourceAt !== apiSyncAnchor
         || !Number.isFinite(match._liveClockSyncedAt)
       ) {
         match._liveClockBaseSeconds = additionBaseSeconds;
         match._liveClockPeriod = period;
-        match._liveClockSyncedAt = now;
+        match._liveClockSourceAt = apiSyncAnchor;
+        match._liveClockSyncedAt = apiSyncAnchor ? Math.min(now, apiSyncAnchor) : now;
       }
       const elapsedSinceSync = Math.max(0, Math.floor((now - match._liveClockSyncedAt) / 1000));
       const displayedExtraMinutes = Math.max(addedMinutes, Math.floor((match._liveClockBaseSeconds + elapsedSinceSync - regulationMinutes * 60) / 60));
@@ -525,11 +558,13 @@
     if (
       match._liveClockBaseSeconds !== officialSeconds
       || match._liveClockPeriod !== period
+      || match._liveClockSourceAt !== apiSyncAnchor
       || !Number.isFinite(match._liveClockSyncedAt)
     ) {
       match._liveClockBaseSeconds = officialSeconds;
       match._liveClockPeriod = period;
-      match._liveClockSyncedAt = now;
+      match._liveClockSourceAt = apiSyncAnchor;
+      match._liveClockSyncedAt = apiSyncAnchor ? Math.min(now, apiSyncAnchor) : now;
     }
 
     const elapsedSinceSync = Math.max(0, Math.floor((now - match._liveClockSyncedAt) / 1000));
@@ -541,6 +576,12 @@
 
   function displayStatusLabel(match) {
     if (match?.status === "scheduled") return formatMatchWeekday(match.date);
+    if (match?.status === "postponed") {
+      // No dia original, informa o destino; no dia de destino, mantém o
+      // padrão Hoje/Amanhã/data usado pelos jogos agendados.
+      if (match.postponedTargetDate && match.date === match.postponedTargetDate) return formatMatchWeekday(match.date);
+      if (match.postponedTargetDate) return `Adiado para ${formatMatchWeekday(match.postponedTargetDate).toLowerCase()}`;
+    }
     return localLiveLabel(match) || match?.statusLabel || "—";
   }
 
@@ -636,6 +677,8 @@
               status: match.status,
               statusLabel: match.statusLabel,
               clockSeconds: match.clockSeconds,
+              clock: match.clock,
+              clockSyncedAt: match.clockSyncedAt,
               clockDisplay: match.clockDisplay,
               period: match.period,
               match,
@@ -669,6 +712,7 @@
         statusLabel: current.statusLabel,
         clock: current.clock,
         clockDisplay: current.clockDisplay,
+        clockSyncedAt: current.clockSyncedAt,
         period: current.period,
       };
       Object.assign(current, update);
@@ -679,6 +723,7 @@
       if (current.status !== "live") {
         delete current._liveClockBaseSeconds;
         delete current._liveClockSyncedAt;
+        delete current._liveClockSourceAt;
       }
       const scoreValue = current.score || current.kickoff || "—";
       const statusValue = displayStatusLabel(current);
@@ -719,6 +764,8 @@
             status: match.status,
             statusLabel: match.statusLabel,
             clockSeconds: match.clockSeconds,
+            clock: match.clock,
+            clockSyncedAt: match.clockSyncedAt,
             clockDisplay: match.clockDisplay,
             period: match.period,
             kickoffIso: match.kickoffIso,
