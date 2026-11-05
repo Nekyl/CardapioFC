@@ -211,6 +211,23 @@ final class ChannelMatcher {
         return stripBroadcastPrefix(canonical(value));
     }
 
+    static boolean isInappropriateChannelName(String value) {
+        String normalized = normalizeChannelName(value);
+        for (String token : normalized.split(" ")) {
+            switch (token) {
+                case "ADULT": case "ADULTS": case "ADULTO": case "ADULTOS":
+                case "XXX": case "PORN": case "PORNO": case "PORNOGRAFIA":
+                case "SEX": case "SEXO": case "SEXY": case "EROTIC": case "EROTICO": case "EROTICA":
+                case "HENTAI": case "PLAYBOY": case "ONLYFANS": case "BRAZZERS": case "REDTUBE":
+                case "NUDE": case "NUDITY": case "FETISH": case "PRIVATE":
+                    return true;
+                default:
+                    break;
+            }
+        }
+        return false;
+    }
+
     static String canonical(String value) {
         String normalized = Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "").toUpperCase(Locale.ROOT)

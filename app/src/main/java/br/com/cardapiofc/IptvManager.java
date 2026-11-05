@@ -210,7 +210,8 @@ public final class IptvManager {
         if (cached != null) return cached;
         Map<String, Channel> found = new LinkedHashMap<>();
         for (Channel channel : fixtureChannels) {
-            if (ChannelMatcher.fixtureScore(channel.searchName, home, away) > 0 && !found.containsKey(channel.url)) found.put(channel.url, channel);
+            if (!ChannelMatcher.isInappropriateChannelName(channel.searchName)
+                    && ChannelMatcher.fixtureScore(channel.searchName, home, away) > 0 && !found.containsKey(channel.url)) found.put(channel.url, channel);
         }
         List<Channel> ordered = new ArrayList<>(found.values());
         ordered.sort(Comparator.<Channel>comparingInt(channel -> ChannelMatcher.fixtureScore(channel.searchName, home, away)).reversed()
@@ -231,12 +232,14 @@ public final class IptvManager {
         // corresponder a vários subcanais numerados da playlist (CAZÉ TV 1..10,
         // PRIME VIDEO 1..9) e a listas com espaçamento/sufixos diferentes.
         for (Channel channel : state.channels) {
-            if (ChannelMatcher.matchesNormalized(query, channel.searchName)) result.put(channel.toJson());
+            if (!ChannelMatcher.isInappropriateChannelName(channel.searchName)
+                    && ChannelMatcher.matchesNormalized(query, channel.searchName)) result.put(channel.toJson());
         }
         // Segunda passada (só afeta o CazéTV): listas sem a variante "CAZÉ TV HD I..VIII".
         if (result.length() == 0) {
             for (Channel channel : state.channels) {
-                if (ChannelMatcher.matchesNormalized(query, channel.searchName, true)) result.put(channel.toJson());
+                if (!ChannelMatcher.isInappropriateChannelName(channel.searchName)
+                        && ChannelMatcher.matchesNormalized(query, channel.searchName, true)) result.put(channel.toJson());
             }
         }
         if (result.length() == 0) logMiss(query);
@@ -270,7 +273,8 @@ public final class IptvManager {
     private synchronized void rebuildSearchIndex() {
         List<Channel> fixtures = new ArrayList<>();
         for (Channel channel : state.channels) {
-            if (ChannelMatcher.isFixtureChannelName(channel.searchName)) fixtures.add(channel);
+            if (!ChannelMatcher.isInappropriateChannelName(channel.searchName)
+                    && ChannelMatcher.isFixtureChannelName(channel.searchName)) fixtures.add(channel);
         }
         fixtureChannels = Collections.unmodifiableList(fixtures);
         searchResultCache.clear();
