@@ -1,7 +1,6 @@
 (() => {
   "use strict";
 
-  // WebViews antigos, como alguns Galaxy S9, ainda não implementam replaceAll.
   if (!String.prototype.replaceAll) {
     String.prototype.replaceAll = function(search, replacement) {
       return this.split(search).join(replacement);
@@ -514,21 +513,50 @@
         break;
       }
     }
+    const explicitClockText = [match?.clockDisplay, match?.clock].some((candidate) => /\d{1,3}:\d{1,2}/.test(String(candidate || "")));
+    if (explicitClockText && Number.isFinite(textual)) return textual;
     if (Number.isFinite(numeric) && numeric === 0 && Number.isFinite(textual) && textual > 0) return textual;
     if (Number.isFinite(numeric) && numeric >= 0) return numeric;
     return textual;
   }
 
+  function formatLiveClock(totalSeconds) {
+    const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+    const minutes = Math.floor(safeSeconds / 60);
+    const seconds = String(safeSeconds % 60).padStart(2, "0");
+    return `${minutes}:${seconds}`;
+  }
+
   function localLiveLabel(match) {
     if (match?.status !== "live") return null;
     const now = Date.now();
-    const additionMatch = typeof match.clockDisplay === "string" ? match.clockDisplay.match(/^(\d+)\+(\d+)'$/) : null;
+    const additionMatch = typeof match.clockDisplay === "string" ? match.clockDisplay.match(/^(\d+)['’′]?\+(\d+)['’′]?$/) : null;
+    const stoppageClockText = [match.clockDisplay, match.clock].map((value) => String(value || "").trim()).find((value) => /^(?:Ao vivo\s+)?\d{1,3}:\d{1,2}\s*(?:\(\s*\+\d{1,2}\s*\)|\+\s*\d{1,2})$/i.test(value));
+    const stoppageClockMatch = stoppageClockText?.match(/^(?:Ao vivo\s+)?(\d{1,3}):(\d{1,2})\s*(?:\(\s*\+(\d{1,2})\s*\)|\+\s*(\d{1,2}))$/i);
     const officialSeconds = officialClockSeconds(match);
     const apiSyncedAt = Number(match.clockSyncedAt);
     const apiSyncAnchor = Number.isFinite(apiSyncedAt) ? apiSyncedAt : 0;
 
-    // Quando a API já informa o acréscimo, ele é a âncora do relógio.
-    // Assim, `45+3` começa em 45+3 e avança para 45+4, 45+5 etc.
+    // Formato da API/Google: "93:27 (+5)". Preserve os segundos e continue
+    // o relógio localmente entre atualizações, sem voltar ao clock=90:00.
+    if (stoppageClockMatch) {
+      const baseSeconds = Number(stoppageClockMatch[1]) * 60 + Number(stoppageClockMatch[2]);
+      const addedMinutes = Number(stoppageClockMatch[3] || stoppageClockMatch[4]);
+      const period = Number(match.period) === 2 ? 2 : 1;
+      if (
+        match._liveClockBaseSeconds !== baseSeconds
+        || match._liveClockPeriod !== period
+        || !Number.isFinite(match._liveClockSyncedAt)
+      ) {
+        match._liveClockBaseSeconds = baseSeconds;
+        match._liveClockPeriod = period;
+        match._liveClockSyncedAt = apiSyncAnchor ? Math.min(now, apiSyncAnchor) : now;
+      }
+      const elapsedSinceSync = Math.max(0, Math.floor((now - match._liveClockSyncedAt) / 1000));
+      const totalSeconds = match._liveClockBaseSeconds + elapsedSinceSync;
+      return `Ao vivo ${formatLiveClock(totalSeconds)} (+${addedMinutes})`;
+    }
+
     if (additionMatch) {
       const regulationMinutes = Number(additionMatch[1]);
       const addedMinutes = Number(additionMatch[2]);
@@ -537,17 +565,15 @@
       if (
         match._liveClockBaseSeconds !== additionBaseSeconds
         || match._liveClockPeriod !== period
-        || match._liveClockSourceAt !== apiSyncAnchor
         || !Number.isFinite(match._liveClockSyncedAt)
       ) {
         match._liveClockBaseSeconds = additionBaseSeconds;
         match._liveClockPeriod = period;
-        match._liveClockSourceAt = apiSyncAnchor;
         match._liveClockSyncedAt = apiSyncAnchor ? Math.min(now, apiSyncAnchor) : now;
       }
       const elapsedSinceSync = Math.max(0, Math.floor((now - match._liveClockSyncedAt) / 1000));
-      const displayedExtraMinutes = Math.max(addedMinutes, Math.floor((match._liveClockBaseSeconds + elapsedSinceSync - regulationMinutes * 60) / 60));
-      return `Ao vivo ${regulationMinutes}+${displayedExtraMinutes}'`;
+      const totalSeconds = match._liveClockBaseSeconds + elapsedSinceSync;
+      return `Ao vivo ${formatLiveClock(totalSeconds)} (+${addedMinutes})`;
     }
 
     if (!Number.isFinite(officialSeconds)) {
@@ -558,12 +584,10 @@
     if (
       match._liveClockBaseSeconds !== officialSeconds
       || match._liveClockPeriod !== period
-      || match._liveClockSourceAt !== apiSyncAnchor
       || !Number.isFinite(match._liveClockSyncedAt)
     ) {
       match._liveClockBaseSeconds = officialSeconds;
       match._liveClockPeriod = period;
-      match._liveClockSourceAt = apiSyncAnchor;
       match._liveClockSyncedAt = apiSyncAnchor ? Math.min(now, apiSyncAnchor) : now;
     }
 
@@ -571,11 +595,17 @@
     // A API já entrega clockSeconds como minuto absoluto da partida.
     // No segundo tempo, 56m continua sendo 56m — nunca 45 + 56.
     const totalSeconds = match._liveClockBaseSeconds + elapsedSinceSync;
-    return `Ao vivo ${Math.floor(totalSeconds / 60)}'`;
+    return `Ao vivo ${formatLiveClock(totalSeconds)}`;
+  }
+
+  function isStarting(match) {
+    if (match?.status !== "scheduled" || String(match.date || "") !== state.today) return false;
+    const kickoff = kickoffTimestamp(match);
+    return Number.isFinite(kickoff) && kickoff <= Date.now();
   }
 
   function displayStatusLabel(match) {
-    if (match?.status === "scheduled") return formatMatchWeekday(match.date);
+    if (match?.status === "scheduled") return isStarting(match) ? "A começar" : formatMatchWeekday(match.date);
     if (match?.status === "postponed") {
       // No dia original, informa o destino; no dia de destino, mantém o
       // padrão Hoje/Amanhã/data usado pelos jogos agendados.
@@ -610,9 +640,22 @@
     return `${live ? liveIndicator() : ""}<span class="status-text">${escapeHtml(statusLabel)}</span>`;
   }
 
-  function matchCard(match) {
+  function matchDateLabel(match) {
     const matchDate = String(match.date || "");
-    const date = matchDate.length >= 10 ? `${matchDate.slice(8, 10)}/${matchDate.slice(5, 7)}` : "—";
+    if (matchUsesDayPill(match)) {
+      return formatMatchWeekday(matchDate);
+    }
+    return matchDate.length >= 10 ? `${matchDate.slice(8, 10)}/${matchDate.slice(5, 7)}` : "—";
+  }
+
+  function matchUsesDayPill(match) {
+    const live = match.status === "live" || match.status === "halftime";
+    const matchDate = String(match.date || "");
+    return live && (matchDate === state.today || matchDate === addDays(state.today, 1));
+  }
+
+  function matchCard(match) {
+    const date = matchDateLabel(match);
     const statusLabel = displayStatusLabel(match);
     const live = match.status === "live" || match.status === "halftime";
     return `<button type="button" class="match-card" data-match-id="${escapeHtml(match.id)}" data-league-name="${escapeHtml(match.league)}">
@@ -621,8 +664,8 @@
         <div class="team-column">${logoOrFallback(match.home?.logo, match.home?.name, "team-logo")}<span class="team-name" title="${escapeHtml(match.home?.shortName)}">${escapeHtml(match.home?.shortName)}</span></div>
         <div class="score-column">
           <span class="score" data-live-field="score">${escapeHtml(match.score || match.kickoff || "—")}</span>
-          <span class="match-date">${escapeHtml(date)}</span>
-          <span class="status-pill${live ? " is-live" : ""}" data-live-field="status">${matchStatusMarkup(match, statusLabel, live)}</span>
+          <span class="match-date${matchUsesDayPill(match) ? " is-day-pill" : ""}">${escapeHtml(date)}</span>
+          <span class="status-pill${live ? " is-live" : ""}${isStarting(match) ? " is-starting" : ""}" data-live-field="status">${matchStatusMarkup(match, statusLabel, live)}</span>
         </div>
         <div class="team-column">${logoOrFallback(match.away?.logo, match.away?.name, "team-logo")}<span class="team-name" title="${escapeHtml(match.away?.shortName)}">${escapeHtml(match.away?.shortName)}</span></div>
       </div>
@@ -670,7 +713,7 @@
         if (generation !== liveStreamGeneration) return;
         applyLiveUpdates({
           matches: (payload.matches || [])
-            .filter((match) => match.status === "live" || match.status === "halftime")
+            .filter((match) => match.status === "live" || match.status === "halftime" || isStarting(match))
             .map((match) => ({
               id: match.id,
               score: match.score,
@@ -706,15 +749,6 @@
       if (!current) return;
 
       const card = refs.content.querySelector(`[data-match-id="${CSS.escape(String(update.id))}"]`);
-      const previous = {
-        score: current.score,
-        status: current.status,
-        statusLabel: current.statusLabel,
-        clock: current.clock,
-        clockDisplay: current.clockDisplay,
-        clockSyncedAt: current.clockSyncedAt,
-        period: current.period,
-      };
       Object.assign(current, update);
       if (!card) {
         needsRender = true;
@@ -727,14 +761,23 @@
       }
       const scoreValue = current.score || current.kickoff || "—";
       const statusValue = displayStatusLabel(current);
+      const dateValue = matchDateLabel(current);
       const live = current.status === "live" || current.status === "halftime";
       const score = card.querySelector('[data-live-field="score"]');
+      const date = card.querySelector(".match-date");
       const status = card.querySelector('[data-live-field="status"]');
       if (score && score.textContent !== scoreValue) score.textContent = scoreValue;
-      const statusChanged = previous.status !== current.status || previous.statusLabel !== current.statusLabel || previous.clock !== current.clock || previous.clockDisplay !== current.clockDisplay || previous.period !== current.period;
-      if (status && statusChanged) {
+      if (date) {
+        date.classList.toggle("is-day-pill", matchUsesDayPill(current));
+        if (date.textContent !== dateValue) date.textContent = dateValue;
+      }
+      if (status) {
+        const starting = isStarting(current);
         status.classList.toggle("is-live", live);
-        status.innerHTML = matchStatusMarkup(current, statusValue, live);
+        status.classList.toggle("is-starting", starting);
+        if (status.querySelector(".status-text")?.textContent !== statusValue) {
+          status.innerHTML = matchStatusMarkup(current, statusValue, live);
+        }
       }
     });
     if (needsRender) {
@@ -849,7 +892,12 @@
 
     // Sem partida ao vivo, escolhe o próximo jogo agendado mais próximo de agora.
     const now = Date.now();
-    const nextScheduled = ordered.find(({ match, timestamp }) => match.status === "scheduled" && Number.isFinite(timestamp) && timestamp >= now);
+    const waitingToStart = ordered
+      .filter(({ match, timestamp }) => isStarting(match) && Number.isFinite(timestamp) && timestamp <= now)
+      .sort((a, b) => b.timestamp - a.timestamp)[0];
+    if (waitingToStart) return waitingToStart.match;
+
+    const nextScheduled = ordered.find(({ match, timestamp }) => match.status === "scheduled" && Number.isFinite(timestamp) && timestamp > now);
     if (nextScheduled) return nextScheduled.match;
 
     // Sem partidas em andamento ou futuras, não rola até partidas encerradas/passadas.

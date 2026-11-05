@@ -228,14 +228,12 @@ public final class IptvManager {
     private JSONArray findStreams(String query) {
         JSONArray result = new JSONArray();
         if (query.isEmpty()) return result;
-        // Varre a lista inteira: o rótulo do app ("CazéTV", "Prime Video") pode
-        // corresponder a vários subcanais numerados da playlist (CAZÉ TV 1..10,
-        // PRIME VIDEO 1..9) e a listas com espaçamento/sufixos diferentes.
+        
         for (Channel channel : state.channels) {
             if (!ChannelMatcher.isInappropriateChannelName(channel.searchName)
                     && ChannelMatcher.matchesNormalized(query, channel.searchName)) result.put(channel.toJson());
         }
-        // Segunda passada (só afeta o CazéTV): listas sem a variante "CAZÉ TV HD I..VIII".
+        
         if (result.length() == 0) {
             for (Channel channel : state.channels) {
                 if (!ChannelMatcher.isInappropriateChannelName(channel.searchName)
@@ -246,7 +244,6 @@ public final class IptvManager {
         return result;
     }
 
-    /** Diagnóstico (logcat, tag CardapioIPTV): mostra canais parecidos quando o rótulo não encontra nada. */
     private void logMiss(String query) {
         try {
             String first = query.split(" ")[0];

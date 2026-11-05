@@ -3,17 +3,6 @@ package br.com.cardapiofc;
 import java.text.Normalizer;
 import java.util.Locale;
 
-/**
- * Regras puras de comparação entre o rótulo de canal mostrado no app e os nomes
- * da lista IPTV do usuário. Sem dependências do Android para permitir testes
- * fora do aparelho.
- *
- * <p>O padrão das listas é sempre o mesmo: um nome base com variações de
- * numeração e sufixo (SPORTV 2, CAZÉ TV 1..10, PRIME VIDEO 9 HD,
- * PARAMOUNT - FUTEBOL, HBO MAX...). O número de subcanal é exato: rótulo sem
- * número equivale ao canal 1 (ou sem número) e rótulo com número só casa com
- * esse mesmo número. Espaçamento e sufixos descritivos são tolerados.
- */
 final class ChannelMatcher {
     private ChannelMatcher() {}
 
@@ -25,14 +14,9 @@ final class ChannelMatcher {
         return matchesNormalized(a, b, false);
     }
 
-    /**
-     * @param lenient segunda passada, usada quando a regra estrita não achou nada na lista:
-     *                aceita o CazéTV sem numeral romano (listas que só têm "CAZE TV FHD").
-     */
     static boolean matchesNormalized(String a, String b, boolean lenient) {
         if (a.isEmpty() || b.isEmpty()) return false;
-        // CazéTV: preferência pela variante de esporte com numeral romano (CAZÉ TV HD I..VIII).
-        // Só se a lista não tiver nenhuma (segunda passada), vale o número exato (sem número = 1).
+        
         if (isCaze(a) && isCaze(b)) return matchesCaze(a, b, lenient);
         if (a.equals(b)) return true;
         // Famílias com regra própria decidem primeiro; se a regra não aceitar,
@@ -45,16 +29,6 @@ final class ChannelMatcher {
         return matchesLoose(a, b);
     }
 
-    /**
-     * Comparação genérica que vale para qualquer canal de qualquer lista.
-     *
-     * <p>Regra do número de variante: o rótulo sem número equivale ao canal 1
-     * (ou ao canal da lista sem número); um rótulo com número só casa com o
-     * mesmo número. Ex.: "PRIME VIDEO" casa com "PRIME VIDEO 1 HD" e com
-     * "PRIME VIDEO", mas nunca com "PRIME VIDEO 2 HD"; "ESPN 2" casa só com
-     * "ESPN 2". O restante do nome (sem o número) tolera espaçamento e sufixos
-     * descritivos.
-     */
     private static boolean matchesLoose(String a, String b) {
         // Canais fixo da partida (FLAMENGO X GRÊMIO) só entram pelas
         // sugestões da partida, nunca pelo rótulo de um canal transmissor.
@@ -81,22 +55,15 @@ final class ChannelMatcher {
         return true;
     }
 
-    /**
-     * Apelidos de canais que as listas nomeiam de formas diferentes do rótulo
-     * do app. Devolve null quando o rótulo não tem apelido (segue a regra
-     * genérica). O número da variante já foi comparado antes.
-     */
     private static Boolean matchesAlias(String baseA, String baseB) {
         String padded = " " + baseB + " ";
-        // "GE TV" x "GLOBO GE TV", "GLOBO GE TVL", "GLOBO GE FUTEBOL".
+        
         if (baseA.equals("GE TV") || baseA.equals("GE")) {
             if (!padded.contains(" GE ")) return compact(baseA).equals(compact(baseB));
             return padded.contains(" TV ") || padded.contains(" TVL ") || padded.contains(" FUTEBOL ")
                     || baseB.equals("GE") || baseB.equals("GLOBO GE");
         }
-        // "PRIME VIDEO" é só o da Amazon ("PRIME VIDEO AMAZON 3", "AMAZON PRIME VIDEO",
-        // "PRIME VIDEO 2"). Outros canais com "Prime" (PRIME BOX BRAZIL, PRIME VIDEO
-        // FILMES...) têm nomes com palavras a mais e ficam de fora.
+        
         if (baseA.equals("PRIME VIDEO") || baseA.equals("PRIME")) {
             boolean prime = false, video = false, amazon = false, extra = false;
             for (String token : baseB.split(" ")) {
@@ -109,15 +76,13 @@ final class ChannelMatcher {
                     default: extra = true;
                 }
             }
-            // Palavras a mais só são aceitas no "Prime Video Amazon" (ex.: "... AMAZON BR 1");
-            // sem "Amazon" qualquer palavra a mais indica outro canal (PRIME BOX, FILMES...).
+            
             if (extra && !(amazon && video)) return false;
             return prime && (video || amazon);
         }
         return null;
     }
 
-    /** Nome sem o número de variante, o número (1 quando não há) e se o número veio escrito. */
     private static final class Variant {
         final String base;
         final int number;
@@ -140,7 +105,7 @@ final class ChannelMatcher {
         int numberIndex = -1;
         int number = 1;
         boolean roman = false;
-        // Numeral romano no último termo ("CAZE TV V" = 5), nunca como nome inteiro.
+
         if (tokens.length > 1 && romanValue(tokens[tokens.length - 1]) > 0) {
             numberIndex = tokens.length - 1;
             number = romanValue(tokens[numberIndex]);
@@ -155,7 +120,7 @@ final class ChannelMatcher {
                 }
             }
         }
-        // Número colado no nome ("SPORTV2", "CAZETV10"), só no último termo.
+        
         if (numberIndex < 0 && tokens.length > 0) {
             String last = tokens[tokens.length - 1];
             java.util.regex.Matcher glued = java.util.regex.Pattern.compile("^([A-Z]{3,})(\\d{1,2})$").matcher(last);

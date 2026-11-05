@@ -662,13 +662,18 @@ def map_status(raw: dict[str, Any]) -> tuple[str, str]:
     return "other", str(raw.get("shortDetail") or description or "—")
 
 
-ADDED_TIME_RE = re.compile(r"(?<!\d)(\d{1,3})\s*\+\s*(\d{1,2})\s*(?:['’′]|min(?:utos?)?)?", re.IGNORECASE)
+ADDED_TIME_RE = re.compile(r"(?<!\d)(\d{1,3})\s*['’′]?\s*\+\s*(\d{1,2})\s*(?:['’′]|min(?:utos?)?)?", re.IGNORECASE)
+CLOCK_WITH_ADDED_TIME_RE = re.compile(r"(?<!\d)(\d{1,3}:\d{2})\s*(?:\(\s*\+(\d{1,2})\s*\)|\+\s*(\d{1,2}))", re.IGNORECASE)
 
 
 def normalize_clock_display(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text:
         return None
+    clock_with_added_time = CLOCK_WITH_ADDED_TIME_RE.search(text)
+    if clock_with_added_time:
+        added = clock_with_added_time.group(2) or clock_with_added_time.group(3)
+        return f"{clock_with_added_time.group(1)} (+{int(added)})"
     match = ADDED_TIME_RE.search(text)
     if match:
         return f"{int(match.group(1))}+{int(match.group(2))}'"
@@ -711,6 +716,10 @@ def numeric_clock_seconds(status_block: dict[str, Any], status_type: dict[str, A
         iso = re.fullmatch(r"PT(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?", text, re.IGNORECASE)
         if iso and any(iso.groups()):
             return float(iso.group(1) or 0) * 3600 + float(iso.group(2) or 0) * 60 + float(iso.group(3) or 0)
+        clock_with_added_time = CLOCK_WITH_ADDED_TIME_RE.search(text)
+        if clock_with_added_time:
+            minute, second = clock_with_added_time.group(1).split(":", 1)
+            return int(minute) * 60 + int(second)
         minute_second = re.search(r"(?:Ao vivo\s+)?(\d{1,3})(?::(\d{1,2}))?\s*(?:['’′]|min(?:utos?)?)?", text, re.IGNORECASE)
         if minute_second:
             return int(minute_second.group(1)) * 60 + int(minute_second.group(2) or 0)
@@ -719,6 +728,13 @@ def numeric_clock_seconds(status_block: dict[str, Any], status_type: dict[str, A
     parsed = [parse(value) for value in raw_values]
     primary = parsed[0]
     textual = [value for value in parsed[1:] if value is not None]
+    # Em acréscimos, o relógio textual (ex.: "93:27 (+5)") é a referência
+    # visível da API e pode ser mais recente que `clock`, que às vezes congela.
+    display_text = str(status_block.get("displayClock") or "").strip()
+    if display_text and (":" in display_text or CLOCK_WITH_ADDED_TIME_RE.search(display_text)):
+        display_seconds = parse(display_text)
+        if display_seconds is not None:
+            return display_seconds
     # A ESPN frequentemente mantém clock=0, mas já atualiza displayClock.
     if primary == 0 and any(value > 0 for value in textual):
         return max(textual)
