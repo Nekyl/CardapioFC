@@ -21,8 +21,8 @@ android {
         applicationId 'br.com.cardapiofc'
         minSdk 26
         targetSdk 35
-        versionCode 126
-        versionName '4.7'
+        versionCode 133
+        versionName '4.14'
         ndk {
             // Padrão compacto ARM64; use -Puniversal para incluir também x86_64.
             if (universalApk) abiFilters 'arm64-v8a', 'x86_64'

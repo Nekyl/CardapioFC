@@ -73,10 +73,10 @@ public final class IptvManager {
     }
 
     public void connectXtream(String server, String username, String password) {
-        connectXtream(server, username, password, true);
+        connectXtream(server, username, password, true, "");
     }
 
-    private void connectXtream(String server, String username, String password, boolean showLoading) {
+    private void connectXtream(String server, String username, String password, boolean showLoading, String streamExtension) {
         final String cleanServer = normalizeServer(server);
         final String user = username == null ? "" : username.trim();
         final String pass = password == null ? "" : password;
@@ -91,8 +91,8 @@ public final class IptvManager {
                 String auth = info.optString("auth", "1");
                 if ("0".equals(auth)) throw new IOException("Usuário ou senha rejeitados.");
                 JSONArray streams = requestArray(cleanServer + "/player_api.php?action=get_live_streams&" + query);
-                List<Channel> channels = parseXtream(streams, cleanServer, user, pass);
-                State next = new State("xtream", cleanServer, user, pass, "", channels,
+                List<Channel> channels = parseXtream(streams, cleanServer, user, pass, streamExtension);
+                State next = new State("xtream", cleanServer, user, pass, "", streamExtension, channels,
                         info.optString("exp_date", ""), info.optInt("active_cons", -1), info.optInt("max_connections", -1), "connected", "");
                 save(next);
             } catch (Throwable error) {
@@ -111,7 +111,7 @@ public final class IptvManager {
         if (xtream != null) {
             // get.php?username=...&password=... é a playlist Xtream; consulte a API
             // JSON em vez de baixar a playlist M3U inteira e estourar o heap do Android.
-            connectXtream(xtream[0], xtream[1], xtream[2], showLoading);
+            connectXtream(xtream[0], xtream[1], xtream[2], showLoading, xtream[3]);
             return;
         }
         if (showLoading) setLoading();
@@ -120,7 +120,7 @@ public final class IptvManager {
                 if (url.isEmpty()) throw new IOException("Informe o link M3U.");
                 List<Channel> channels = parseM3uUrl(url);
                 if (channels.isEmpty()) throw new IOException("Nenhum canal foi encontrado na playlist.");
-                save(new State("m3u", "", "", "", url, channels, "", -1, -1, "connected", ""));
+                save(new State("m3u", "", "", "", url, "", channels, "", -1, -1, "connected", ""));
             } catch (Throwable error) {
                 fail(error.getMessage());
             }
@@ -130,7 +130,7 @@ public final class IptvManager {
     public void refresh() {
         State current = state;
         if ("m3u".equals(current.type)) connectM3u(current.playlist);
-        else if ("xtream".equals(current.type)) connectXtream(current.server, current.username, current.password);
+        else if ("xtream".equals(current.type)) connectXtream(current.server, current.username, current.password, true, current.streamExtension);
     }
 
     /** Atualiza a lista uma vez por dia, sem limpar os canais já cacheados nem alterar a UI. */
@@ -138,7 +138,7 @@ public final class IptvManager {
         State current = state;
         if (!"connected".equals(current.status) || todayKey().equals(prefs.getString(PREFETCH_KEY, ""))) return;
         if ("m3u".equals(current.type)) connectM3u(current.playlist, false);
-        else if ("xtream".equals(current.type)) connectXtream(current.server, current.username, current.password, false);
+        else if ("xtream".equals(current.type)) connectXtream(current.server, current.username, current.password, false, current.streamExtension);
     }
 
     public synchronized void disconnect() {
@@ -150,12 +150,12 @@ public final class IptvManager {
     public void shutdown() { executor.shutdownNow(); }
 
     private synchronized void setLoading() {
-        state = new State("", "", "", "", "", Collections.emptyList(), "", -1, -1, "loading", "");
+        state = new State("", "", "", "", "", "", Collections.emptyList(), "", -1, -1, "loading", "");
         clearSearchData();
     }
 
     private synchronized void fail(String message) {
-        state = new State("", "", "", "", "", Collections.emptyList(), "", -1, -1, "error", message == null ? "Falha ao carregar a lista." : message);
+        state = new State("", "", "", "", "", "", Collections.emptyList(), "", -1, -1, "error", message == null ? "Falha ao carregar a lista." : message);
         clearSearchData();
     }
 
@@ -292,6 +292,7 @@ public final class IptvManager {
             String path = uri.getPath();
             String username = uri.getQueryParameter("username");
             String password = uri.getQueryParameter("password");
+            String output = uri.getQueryParameter("output");
             String scheme = uri.getScheme();
             String authority = uri.getAuthority();
             if (path == null || !path.toLowerCase(Locale.ROOT).endsWith("get.php")
@@ -299,7 +300,9 @@ public final class IptvManager {
                     || username == null || username.trim().isEmpty() || password == null || password.isEmpty()) {
                 return null;
             }
-            return new String[]{scheme + "://" + authority, username.trim(), password};
+            String preferredExtension = "m3u8".equalsIgnoreCase(output) ? "m3u8"
+                    : ("ts".equalsIgnoreCase(output) ? "ts" : "");
+            return new String[]{scheme + "://" + authority, username.trim(), password, preferredExtension};
         } catch (Throwable ignored) {
             return null;
         }
@@ -319,8 +322,7 @@ public final class IptvManager {
     private static String requestText(String urlText) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(urlText).openConnection();
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS); connection.setReadTimeout(READ_TIMEOUT_MS);
-        connection.setRequestProperty("Accept", "application/json, text/plain, */*");
-        connection.setRequestProperty("User-Agent", "CardapioFC/4.1 Android");
+        setIptvRequestHeaders(connection, urlText, "application/json, text/plain, */*");
         int code = connection.getResponseCode();
         InputStream input = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
         if (input == null) throw new IOException("Servidor sem resposta (HTTP " + code + ").");
@@ -332,13 +334,15 @@ public final class IptvManager {
         return result.toString();
     }
 
-    private static List<Channel> parseXtream(JSONArray array, String server, String user, String pass) {
+    private static List<Channel> parseXtream(JSONArray array, String server, String user, String pass, String preferredExtension) {
         List<Channel> result = new ArrayList<>();
         for (int i = 0; i < array.length(); i++) {
             JSONObject item = array.optJSONObject(i); if (item == null) continue;
             String name = item.optString("name", "").trim(); String id = item.optString("stream_id", "");
             if (name.isEmpty() || id.isEmpty()) continue;
-            String extension = item.optString("container_extension", "m3u8");
+            String extension = preferredExtension == null || preferredExtension.isEmpty()
+                    ? item.optString("container_extension", "m3u8") : preferredExtension;
+            if (!extension.matches("(?i)[a-z0-9]{1,8}")) extension = "m3u8";
             String url = server + "/live/" + encSafe(user) + "/" + encSafe(pass) + "/" + id + "." + (extension.isEmpty() ? "m3u8" : extension);
             result.add(new Channel(name, url, item.optString("stream_icon", ""), id));
         }
@@ -353,9 +357,7 @@ public final class IptvManager {
         connection.setInstanceFollowRedirects(true);
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
-        connection.setRequestProperty("Accept", "audio/x-mpegurl, application/vnd.apple.mpegurl, text/plain, */*");
-        connection.setRequestProperty("Accept-Encoding", "identity");
-        connection.setRequestProperty("User-Agent", "CardapioFC/4.1 Android");
+        setIptvRequestHeaders(connection, urlText, "audio/x-mpegurl, application/vnd.apple.mpegurl, text/plain, */*");
         int code = connection.getResponseCode();
         InputStream input = code >= 400 ? connection.getErrorStream() : connection.getInputStream();
         if (input == null) throw new IOException("Servidor sem resposta (HTTP " + code + ").");
@@ -384,6 +386,20 @@ public final class IptvManager {
             connection.disconnect();
         }
         return result;
+    }
+
+    private static void setIptvRequestHeaders(HttpURLConnection connection, String urlText, String accept) {
+        connection.setRequestProperty("Accept", accept);
+        connection.setRequestProperty("Accept-Encoding", "identity");
+        connection.setRequestProperty("User-Agent", "VLC/3.0.20 LibVLC/3.0.20");
+        try {
+            Uri uri = Uri.parse(urlText);
+            String host = uri.getHost();
+            if (uri.getScheme() != null && host != null && !host.isEmpty()) {
+                String authority = host + (uri.getPort() >= 0 ? ":" + uri.getPort() : "");
+                connection.setRequestProperty("Referer", uri.getScheme() + "://" + authority + "/");
+            }
+        } catch (Throwable ignored) { }
     }
 
     private static String attr(String line, String key) {
@@ -420,12 +436,12 @@ public final class IptvManager {
     }
 
     private static final class State {
-        final String type, server, username, password, playlist, expiry, status, error; final List<Channel> channels; final int active, max;
-        State(String type, String server, String username, String password, String playlist, List<Channel> channels, String expiry, int active, int max, String status, String error) { this.type=type;this.server=server;this.username=username;this.password=password;this.playlist=playlist;this.channels=channels;this.expiry=expiry;this.active=active;this.max=max;this.status=status;this.error=error; }
-        static State empty() { return new State("", "", "", "", "", Collections.emptyList(), "", -1, -1, "disconnected", ""); }
+        final String type, server, username, password, playlist, streamExtension, expiry, status, error; final List<Channel> channels; final int active, max;
+        State(String type, String server, String username, String password, String playlist, String streamExtension, List<Channel> channels, String expiry, int active, int max, String status, String error) { this.type=type;this.server=server;this.username=username;this.password=password;this.playlist=playlist;this.streamExtension=streamExtension;this.channels=channels;this.expiry=expiry;this.active=active;this.max=max;this.status=status;this.error=error; }
+        static State empty() { return new State("", "", "", "", "", "", Collections.emptyList(), "", -1, -1, "disconnected", ""); }
         JSONObject toJson() { return makeJson(false); }
         JSONObject toStorageJson() { return makeJson(true); }
-        JSONObject makeJson(boolean secret) { JSONObject o=new JSONObject(); try { o.put("type",type);o.put("server",server);o.put("username",username);if(secret)o.put("password",password);o.put("playlist",playlist);o.put("expiry",expiry);o.put("active",active);o.put("max",max);o.put("status",status);o.put("error",error); JSONArray a=new JSONArray();for(Channel c:channels)a.put(c.toJson());o.put("channels",a); } catch(Exception ignored){} return o; }
-        static State fromJson(JSONObject o) { List<Channel> list=new ArrayList<>();JSONArray a=o.optJSONArray("channels");if(a!=null)for(int i=0;i<a.length();i++)list.add(Channel.fromJson(a.optJSONObject(i)));return new State(o.optString("type"),o.optString("server"),o.optString("username"),o.optString("password"),o.optString("playlist"),list,o.optString("expiry"),o.optInt("active",-1),o.optInt("max",-1),o.optString("status","disconnected"),o.optString("error")); }
+        JSONObject makeJson(boolean secret) { JSONObject o=new JSONObject(); try { o.put("type",type);o.put("server",server);o.put("username",username);if(secret)o.put("password",password);o.put("playlist",playlist);o.put("streamExtension",streamExtension);o.put("expiry",expiry);o.put("active",active);o.put("max",max);o.put("status",status);o.put("error",error); JSONArray a=new JSONArray();for(Channel c:channels)a.put(c.toJson());o.put("channels",a); } catch(Exception ignored){} return o; }
+        static State fromJson(JSONObject o) { List<Channel> list=new ArrayList<>();JSONArray a=o.optJSONArray("channels");if(a!=null)for(int i=0;i<a.length();i++)list.add(Channel.fromJson(a.optJSONObject(i)));return new State(o.optString("type"),o.optString("server"),o.optString("username"),o.optString("password"),o.optString("playlist"),o.optString("streamExtension"),list,o.optString("expiry"),o.optInt("active",-1),o.optInt("max",-1),o.optString("status","disconnected"),o.optString("error")); }
     }
 }

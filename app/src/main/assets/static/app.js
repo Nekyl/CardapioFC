@@ -62,6 +62,27 @@
   }
 
   function nativeIptv() { return window.CardapioIPTV || null; }
+  function formatIptvExpiry(value) {
+    const raw = String(value ?? "").trim();
+    if (!raw || /^(?:0|null|undefined|none|unlimited|ilimitado)$/i.test(raw)) return "";
+    const dmy = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    if (dmy) return `${dmy[1].padStart(2, "0")}/${dmy[2].padStart(2, "0")}/${dmy[3]}`;
+    const isoDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/);
+    if (isoDate) return `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}`;
+    const compactDate = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (compactDate) return `${compactDate[3]}/${compactDate[2]}/${compactDate[1]}`;
+    const isTimestamp = /^\d{9,13}$/.test(raw);
+    let timestamp = isTimestamp ? Number(raw) : Date.parse(raw);
+    if (Number.isFinite(timestamp) && isTimestamp && timestamp < 100000000000) timestamp *= 1000;
+    if (!Number.isFinite(timestamp)) return raw;
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return raw;
+    try {
+      return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/Sao_Paulo" }).format(date);
+    } catch (_) {
+      return date.toLocaleDateString("pt-BR");
+    }
+  }
   function readIptvStatus() {
     try { return JSON.parse(nativeIptv()?.getStatusJson?.() || "{}"); } catch (_) { return {}; }
   }
@@ -72,13 +93,8 @@
     else if (status.status === "error") refs.iptvStatusLine.textContent = status.error || "Não foi possível carregar a lista.";
     else if (status.status === "connected") {
       const connections = status.active >= 0 && status.max >= 0 ? ` · Conexões: ${status.active}/${status.max}` : "";
-      const expiryValue = String(status.expiry ?? "").trim();
-      const hasExpiry =
-        expiryValue &&
-        expiryValue.toLowerCase() !== "null" &&
-        expiryValue.toLowerCase() !== "undefined";
-
-      const expiry = ` · Validade: ${hasExpiry ? expiryValue : "Ilimitado"}`;
+      const expiryValue = formatIptvExpiry(status.expiry);
+      const expiry = ` · Validade: ${expiryValue || "Ilimitado"}`;
 
       refs.iptvStatusLine.textContent = `${count} canais${connections}${expiry}`;
     } else refs.iptvStatusLine.textContent = "Nenhuma lista conectada.";
